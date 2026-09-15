@@ -1,0 +1,17 @@
+.avatars/
+bin/
+dist/
+*.exe
+*.test
+coverage.out
+*.bak
+configs/agent.yaml
+**/avatars/configs/agent.yaml
+!configs/agent.yaml.example
+workflow_plan.md
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
