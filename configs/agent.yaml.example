@@ -1,0 +1,145 @@
+# Copy to configs/agent.yaml (gitignored) and set the provider env var.
+# Never put plaintext api_key values in YAML. Use api_key_env only.
+name: avatars
+mode: local
+default_model: deepseek-v4-flash
+llm:
+  active_provider: deepseek
+  enable_web_search: false
+  think_mode: auto
+  timeout_ms: 180000
+  api_key_env: DEEPSEEK_API_KEY
+  base_url: https://api.deepseek.com
+  providers:
+    google:
+      provider: google
+      model: googleai/gemini-3.5-flash
+      enable_web_search: true
+      api_key_env: GEMINI_API_KEY
+    anthropic:
+      provider: anthropic
+      model: anthropic/claude-4.6-sonnet-latest
+      api_key_env: ANTHROPIC_API_KEY
+    openai:
+      provider: openai
+      model: openai/gpt-5.5
+      api_key_env: OPENAI_API_KEY
+    openrouter:
+      provider: openrouter
+      model: openai/gpt-5.4-mini
+      enable_web_search: true
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+    deepseek:
+      provider: deepseek
+      model: deepseek-v4-flash
+      api_key_env: DEEPSEEK_API_KEY
+      base_url: https://api.deepseek.com
+    qwen:
+      provider: qwen
+      model: qwen3.6-max-preview
+      enable_web_search: true
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    kimi:
+      provider: kimi
+      model: kimi-k2.6
+      api_key_env: MOONSHOT_API_KEY
+      base_url: https://api.moonshot.cn/v1
+    glm:
+      provider: glm
+      model: glm-5.1
+      api_key_env: ZHIPUAI_API_KEY
+      base_url: https://open.bigmodel.cn/api/paas/v4
+    doubao:
+      provider: doubao
+      model: ""
+      api_key_env: ARK_API_KEY
+      base_url: https://ark.cn-beijing.volces.com/api/v3
+    nvidia:
+      provider: nvidia
+      model: nvidia/nemotron-3-super-120b-a12b
+      api_key_env: NVIDIA_API_KEY
+      base_url: https://integrate.api.nvidia.com/v1
+    agnes:
+      provider: agnes
+      model: agnes-2.5-flash
+      api_key_env: AGNES_API_KEY
+      # China service: https://api.agnes-ai.cn/v1
+      # International: https://apihub.agnes-ai.com/v1
+      # Intl alternate: https://apihub.agnes-ai.cn/v1
+      # Or set AGNES_BASE_URL. Do not mix a China key with an international host.
+      base_url: https://api.agnes-ai.cn/v1
+    mistral:
+      provider: mistral
+      model: mistral-large-latest
+      api_key_env: MISTRAL_API_KEY
+      base_url: https://api.mistral.ai/v1
+    ollama:
+      provider: ollama
+      model: qwen3.6-35b-a3b
+      base_url: http://localhost:11434/v1
+    lm-studio:
+      provider: lm-studio
+      model: qwen3.6-35b-a3b
+      base_url: http://localhost:1234/v1
+    minimax:
+      provider: minimax
+      model: "MiniMax-M2.7"
+      api_key_env: MINIMAX_API_KEY
+      base_url: "https://api.minimaxi.com/v1"
+    mimo:
+      provider: mimo
+      model: "mimo-v2.5-pro"
+      api_key_env: "DEEPSEEK_API_KEY"
+      base_url: "https://api.xiaomimimo.com/v1"
+    custom-compatible:
+      provider: custom-compatible
+      model: ""
+      api_key_env: "DEEPSEEK_API_KEY"
+      base_url: ""
+transcript_dir: .avatars/sessions
+verification:
+  min_edited_files: 3
+  require_for_api: true
+  require_for_infra: true
+mcp:
+  servers:
+    filesystem:
+      url: ""
+      description: "MCP filesystem server - read/write files within allowed directories."
+    brave-search:
+      url: ""
+      description: "Brave Search API - web search via MCP protocol."
+    fetch:
+      url: ""
+      description: "MCP fetch server - fetch web page content and convert to markdown."
+features:
+  # Only `memory` is a real runtime switch (SQLite hot-memory).
+  # Legacy `stage` / `skills` keys are ignored if present.
+  memory: true
+workflow:
+  auto_confirm: false
+model_routing:
+  planner: ""
+  researcher: ""
+  builder: ""
+  critic: ""
+  synthesizer: ""
+llm_defaults:
+  # Daily codegen request (not the model output maximum). Truncation recovery
+  # may escalate up to the harness ceiling (65536). Agnes clamps at 65536.
+  max_tokens: 16384
+  temperature: 0.0
+  top_p: 1.0
+  structured_output: false
+  timeout_ms: 300000
+  shell_done_timeout_ms: 120000
+  fallback_providers: []
+  max_tool_turns_by_role:
+    builder: 24
+    critic: 8
+    synthesizer: 1
+    researcher: 5
+    planner: 5
+  max_parallel_avatars: 4

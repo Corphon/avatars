@@ -1,0 +1,95 @@
+# P1-3d: Unified intent keywords — single source of truth.
+# Compiled from complexity.go 12 lists + natural_language.go handlers + intent.go signals.
+# Loaded at startup. heuristicAssess and NL classifier both read from here.
+
+multi_step_verbs:
+  en: [refactor, redesign, migrate, implement, architect]
+  zh: [重构, 实现, 迁移, 全面, 设计, 升级, 拆分, 整合]
+  analysis: [find, search, count, "list all", grep, "scan for", "how many"]
+
+code_impl_verbs:
+  en: ["add a new", "create a new", "implement a", "build a", plugin, handler, module, feature, service, create, generate, "write a"]
+  zh: [添加新, 创建新, 实现, 构建, 插件, 处理器, 模块, 功能, 服务, 创建, 新建, 生成, 写一个, 做一个]
+
+large_verbs:
+  en: [redesign, migrate, architect]
+  zh: [全面重构, 迁移到, 重构整个]
+
+code_indicators:
+  - .py
+  - .go
+  - .rs
+  - .js
+  - .ts
+  - python
+  - golang
+  - rust
+  - cli
+  - sqlite
+  - database
+  - api
+  - package
+  - module
+  - library
+  - test
+  - app
+  - application
+  - server
+  - storage
+  - encrypt
+  - auth
+
+deep_signals:
+  en: [database, sqlite, postgres, mysql, mongodb, redis, encrypt, decrypt, aes, rsa, hash, password, auth, rest, graphql, grpc, websocket, "http server", api, concurrent, parallel, async, thread, goroutine, "unit test", "integration test", "test coverage", microservice, plugin, middleware, pipeline]
+  zh: [数据库, 存储, 持久化, 加密, 解密, 认证, 鉴权, 网络, 接口, 服务端, 并发, 异步, 线程, 协程, 单元测试, 集成测试, 测试覆盖, 微服务, 中间件, 流水线]
+
+components:
+  - [cli, command, 命令行, 终端, argparse, cobra]
+  - [database, sql, storage, sqlite, 数据库, 存储, "json file"]
+  - [test, 测试, pytest, unittest]
+  - [web, http, api, rest, server, 网站, 网页]
+  - [config, 配置, yaml, toml, env]
+  - [import, export, 导入, 导出, csv]
+
+doc_exts: [.md, .yaml, .yml, .txt]
+
+code_exts: [.go, .py, .js, .ts, .rs, .java, .cs, ".c ", .cpp, .rb, .php, .swift]
+code_langs: [python, golang, rust, javascript, typescript, "c++", "c language"]
+code_tech: [sqlite, database, mysql, postgres, mongodb, api, cli]
+
+single_action:
+  en: [fix, rename, delete, remove, update, modify, change, add, edit, rollback, revert, copy, move, show, print, list, sort, enable, disable, start, stop, run, "turn on", "turn off", bump, tag, release, reset, clean, clear, set, get, put, push, pull]
+  zh: [修复, 重命名, 删除, 移除, 更新, 修改, 更改, 添加, 编辑, 回滚, 还原, 复制, 移动, 显示, 打印, 列出, 排序, 启用, 禁用, 启动, 停止, 运行, 开启, 关闭, 重置, 清理, 清除, 设置, 获取]
+
+documentation:
+  en: [document, doc, readme, changelog, report, "release notes", "user guide", "api doc", spec, specification, "how-to", tutorial, guide, manual, "design doc", "architecture doc", "generate doc", documentation, "user manual", "developer guide", "contributing guide"]
+  zh: [文档, 说明文档, 报告, 发布说明, 用户指南, 接口文档, 规范, 教程, 指南, 操作手册, 用户手册, 设计文档, 架构文档, 开发指南, 贡献指南]
+
+exts:
+  - .go
+  - .py
+  - .js
+  - .ts
+  - .rs
+  - .java
+  - .cs
+  - ".c"
+  - .cpp
+  - .rb
+  - .php
+  - .swift
+  - .md
+  - .yaml
+  - .yml
+  - .txt
+  - .json
+  - .toml
+  - .env
+  - .xml
+  - .csv
+  - .sql
+
+# L5: Signals that trigger the clarify loop — the user's request is ambiguous.
+ambiguous_signals:
+  en: ["fix this", "make it better", "improve", "optimize", "clean up", "refactor everything", "do the thing", "update", "change it", "help", "fix the bug", "make it work", "add feature", "can you", "something wrong"]
+  zh: ["修复一下", "帮我改", "改一下", "优化一下", "清理", "重构一下", "更新一下", "帮我", "帮忙看看", "能不能", "怎么做", "有问题", "不太对"]

@@ -1,0 +1,275 @@
+version: 1
+purpose: "Compact machine-readable action map for bounded intent routing. This file supplements CLI_guide.md; it does not replace the full human guide."
+routing_rules:
+  - "Choose only existing bounded avatars commands."
+  - "Prefer read-only inspection commands when the user asks to inspect, analyze, review, or diagnose."
+  - "Use --from-file when the user's detailed task plan is stored in a markdown file."
+  - "Use --permission-mode plan when the user explicitly asks for read-only work or says not to modify files."
+  - "Clarify or require confirmation for ambiguous, mutating, approval, denial, archive, repair, or delete actions."
+actions:
+  - id: intent_from_file
+    command: "avatars intent --from-file <plan.md>"
+    summary: "Route a markdown task plan as the user intent."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user has written a detailed task plan in a markdown file."
+      - "The user asks avatars to read a plan file and decide the bounded next command."
+  - id: run_from_file
+    command: "avatars run --from-file <plan.md>"
+    summary: "Run a markdown task plan directly through the task runtime."
+    safety: "task"
+    requires_confirmation: false
+    use_when:
+      - "The user explicitly wants to execute the plan file as a task."
+  - id: repl
+    command: "avatars repl [--task <task-id>] [--new-task]"
+    summary: "Start the bounded interactive loop."
+    safety: "interactive"
+    requires_confirmation: false
+    use_when:
+      - "The user wants interactive natural-language operation."
+      - "The user asks whether typing avatars should enter a conversation loop."
+  - id: analyze_readonly
+    command: "avatars run --new-task --permission-mode plan \"<task>\""
+    summary: "Analyze, review, or inspect a repository without modifying files."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to analyze, inspect, review, summarize, or find issues."
+      - "The user says do not modify files, no code changes, read-only, or only analyze."
+  - id: bundle_health
+    command: "avatars governance status [--task <task-id>]"
+    summary: "Inspect runtime readiness and governance health."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks whether avatars is healthy, ready, or configured correctly."
+      - "The user asks for a bundle or runtime readiness check."
+  - id: route_preview
+    command: "avatars route [--task <task-id>] [--new-task] \"<intent>\""
+    summary: "Preview the route before execution."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user wants to inspect how a natural-language request will route."
+      - "The user asks what command avatars would choose before running it."
+  - id: target_project_shakedown
+    command: "avatars run --new-task --permission-mode plan \"<task>\""
+    summary: "Run a fresh read-only target-project shakedown."
+    safety: "task"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to analyze a target project, find issues, and write a report."
+      - "The user wants a fresh read-only sweep instead of memory-only follow-up."
+  - id: report_evidence_check
+    command: "avatars tasks show <task-id> --view verifier"
+    summary: "Inspect verifier evidence and report trail for one task."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to inspect report evidence, transcript evidence, or verifier output."
+      - "The user wants to confirm what the latest task report actually recorded."
+  - id: memory_recall_check
+    command: "avatars memory status [--task <task-id>]"
+    summary: "Inspect task memory and recall health."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks what the runtime remembers about a task or workspace."
+      - "The user asks whether follow-up work should reuse memory instead of rereading files."
+  - id: smoke_repl_routing
+    command: "avatars smoke repl-routing [--task <task-id>] [--new-task]"
+    summary: "Check the deterministic REPL routing matrix."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user wants a routing smoke test for direct, memory, safe-run, guarded, or clarify cases."
+      - "The user wants to verify the local route classifier without launching a real task."
+  - id: smoke_coding_gate
+    command: "avatars smoke coding-gate"
+    summary: "Check coding-readiness gates before allowing implementation tasks."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user wants to know whether avatars is ready for coding tasks."
+      - "The user wants to verify intent, UX repair, memory/report proof, and plan-mode boundaries before edits."
+  - id: actions_list
+    command: "avatars actions list"
+    summary: "Inspect the structured CLI action map."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to show, inspect, or list the action map."
+      - "The user asks what bounded CLI actions are available."
+  - id: git_status
+    command: "avatars git status"
+    summary: "Inspect repository status through the bounded git surface."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks what files changed or wants a quick repo status check."
+      - "The user wants read-only git inspection inside the avatars workspace."
+  - id: git_diff
+    command: "avatars git diff"
+    summary: "Inspect repository diffs through the bounded git surface."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to review code changes or see the current diff."
+      - "The user wants read-only git inspection before editing."
+  - id: git_log
+    command: "avatars git log --oneline -5"
+    summary: "Inspect recent repository history."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks what changed recently or wants a compact commit history."
+      - "The user wants a safe history check without leaving the avatars surface."
+  - id: llm_providers
+    command: "avatars llm providers"
+    summary: "Inspect available LLM provider profiles."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks which LLM providers are available."
+      - "The user asks about model profiles or provider capabilities."
+  - id: llm_show
+    command: "avatars llm show <provider>"
+    summary: "Inspect one LLM provider profile."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks for the details of one LLM provider."
+      - "The user wants to inspect a specific provider config before routing work."
+  - id: mcp_list
+    command: "avatars mcp list"
+    summary: "Inspect configured MCP servers."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks which MCP servers are configured."
+      - "The user wants a read-only inventory of local MCP endpoints."
+  - id: mcp_show
+    command: "avatars mcp show <server-name>"
+    summary: "Inspect one configured MCP server."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks for one MCP server's configured URL or description."
+  - id: mcp_inspect
+    command: "avatars mcp inspect [--task <task-id>] <server-name-or-url>"
+    summary: "Inspect MCP server capabilities."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user wants a read-only probe of MCP tools, resources, or prompts."
+  - id: mcp_call
+    command: "avatars mcp call [--task <task-id>] <server-name-or-url> <method> [params-json]"
+    summary: "Call a configured MCP server or URL."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user explicitly asks to read or inspect data from an MCP server."
+  - id: run_named_task
+    command: "avatars run --task <task-id> \"<task>\""
+    summary: "Run work in a stable task workspace."
+    safety: "task"
+    requires_confirmation: false
+    use_when:
+      - "The user provides or implies an existing task id."
+  - id: verify
+    command: "avatars verify [--race] [--task <task-id>]"
+    summary: "Run verifier checks."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to verify, test, validate, or rerun checks."
+  - id: tasks_show
+    command: "avatars tasks show <task-id> [--view planner|synthesizer|verifier|governance|avatar:<avatar-id>]"
+    summary: "Inspect task truth, summaries, memory, and verifier status."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks what happened in a task or wants the latest task status."
+  - id: governance_status
+    command: "avatars governance status [--task <task-id>]"
+    summary: "Inspect governance and runtime readiness without mutation."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks about governance, guardrails, readiness, or runtime truth."
+  - id: memory_status
+    command: "avatars memory status [--task <task-id>]"
+    summary: "Inspect memory state and lifecycle counts."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks about memory, context, recall, or retained lessons."
+  - id: memory_maintain_dry_run
+    command: "avatars memory maintain --dry-run [--task <task-id>]"
+    summary: "Preview memory lifecycle maintenance without mutation."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to inspect memory maintenance, pruning, or archive candidates."
+  - id: skills_status
+    command: "avatars skills status"
+    summary: "Inspect skill lifecycle directories."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks about skills, generated skill files, or skill lifecycle state."
+  - id: skills_generate
+    command: "avatars skills generate [--task <task-id>] \"<task>\""
+    summary: "Generate a new skill candidate."
+    safety: "task"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to generate, create, draft, or build a skill."
+      - "The user asks for a skill that analyzes a project or repository."
+  - id: skills_reconcile
+    command: "avatars skills reconcile"
+    summary: "Inspect skill governance drift against the ledger."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to find skill drift or check skill governance consistency."
+  - id: plugins_list
+    command: "avatars plugins list"
+    summary: "Inspect local plugin bundles and their standardized skills."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks what plugins are installed or available locally."
+      - "The user asks whether plugin-provided skills are visible."
+  - id: guarded_write
+    command: "avatars write [--overwrite] [--permission-mode <mode>] <path> <content>"
+    summary: "Write a file through the guarded tool surface."
+    safety: "mutating"
+    requires_confirmation: true
+    use_when:
+      - "The user explicitly asks to create or overwrite a file."
+  - id: guarded_patch
+    command: "avatars patch [--replace-all] [--permission-mode <mode>] <path> <old> <new>"
+    summary: "Patch a file through the guarded tool surface."
+    safety: "mutating"
+    requires_confirmation: true
+    use_when:
+      - "The user explicitly asks to edit existing file content."
+  - id: rollback_inspect
+    command: "avatars rollback inspect --artifact <path>"
+    summary: "Inspect a rollback artifact before applying it."
+    safety: "read"
+    requires_confirmation: false
+    use_when:
+      - "The user asks to inspect a rollback artifact."
+      - "The user wants to verify rollback before-image details before applying recovery."
+  - id: rollback_apply
+    command: "avatars rollback apply --artifact <path> --confirm"
+    summary: "Apply a rollback artifact after confirmation."
+    safety: "mutating"
+    requires_confirmation: true
+    use_when:
+      - "The user explicitly asks to apply a rollback artifact."
+      - "The user wants to restore a file from a captured before-image and accepts confirmation."

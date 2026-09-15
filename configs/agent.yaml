@@ -1,0 +1,180 @@
+name: avatars
+mode: local
+default_model: deepseek-v4.1-flash
+llm:
+  active_provider: deepseek
+  enable_web_search: false
+  think_mode: auto
+  # timeout_ms covers HTTP request timeout (was 180s).
+  # For wall-clock node execution timeout, see llm_defaults node_timeout_ms.
+  timeout_ms: 180000
+  # Never put plaintext keys here. Copy configs/agent.yaml.example and set the env var.
+  api_key_env: DEEPSEEK_API_KEY
+  base_url: https://api.deepseek.com
+  providers:
+    google:
+      provider: google
+      model: googleai/gemini-3.6-flash
+      enable_web_search: true
+      api_key_env: GEMINI_API_KEY
+    anthropic:
+      provider: anthropic
+      model: anthropic/claude-4.8-sonnet-latest
+      api_key_env: ANTHROPIC_API_KEY
+    openai:
+      provider: openai
+      model: openai/gpt-5.5
+      api_key_env: OPENAI_API_KEY
+    openrouter:
+      provider: openrouter
+      model: openai/gpt-5.4-mini
+      enable_web_search: true
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+    deepseek:
+      provider: deepseek
+      model: deepseek-v4.1-flash
+      api_key_env: DEEPSEEK_API_KEY
+      base_url: https://api.deepseek.com
+    qwen:
+      provider: qwen
+      model: qwen3.8-max-preview
+      enable_web_search: true
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    kimi:
+      provider: kimi
+      model: kimi-k3
+      api_key_env: MOONSHOT_API_KEY
+      base_url: https://api.moonshot.cn/v1
+    glm:
+      provider: glm
+      model: glm-5.3-flash
+      api_key_env: ZHIPUAI_API_KEY
+      base_url: https://open.bigmodel.cn/api/paas/v4
+    doubao:
+      provider: doubao
+      model: ""
+      api_key_env: ARK_API_KEY
+      base_url: https://ark.cn-beijing.volces.com/api/v3
+    nvidia:
+      provider: nvidia
+      model: nvidia/nemotron-3-super-120b-a12b
+      api_key_env: NVIDIA_API_KEY
+      base_url: https://integrate.api.nvidia.com/v1
+    agnes:
+      provider: agnes
+      model: agnes-3.0-flash
+      api_key_env: AGNES_API_KEY
+      # China service: https://api.agnes-ai.cn/v1
+      # International: https://apihub.agnes-ai.com/v1
+      # Intl alternate: https://apihub.agnes-ai.cn/v1
+      # Or set AGNES_BASE_URL. Do not mix a China key with an international host.
+      base_url: https://api.agnes-ai.cn/v1
+    mistral:
+      provider: mistral
+      model: mistral-large-latest
+      api_key_env: MISTRAL_API_KEY
+      base_url: https://api.mistral.ai/v1
+    ollama:
+      provider: ollama
+      model: qwen3.6-35b-a3b
+      base_url: http://localhost:11434/v1
+    lm-studio:
+      provider: lm-studio
+      model: qwen3.6-35b-a3b
+      base_url: http://localhost:1234/v1
+    minimax:
+      provider: minimax
+      model: "MiniMax-M3"
+      api_key_env: MINIMAX_API_KEY
+      base_url: "https://api.minimaxi.com/v1"
+    mimo:
+      provider: mimo
+      model: "mimo-v2.5-pro"
+      api_key_env: "DEEPSEEK_API_KEY"
+      base_url: "https://api.xiaomimimo.com/v1"
+    custom-compatible:
+      provider: custom-compatible
+      model: ""
+      api_key_env: "DEEPSEEK_API_KEY"
+      base_url: ""
+transcript_dir: .avatars/sessions
+verification:
+  min_edited_files: 3
+  require_for_api: true
+  require_for_infra: true
+mcp:
+  servers:
+    # Built-in MCP server presets. Empty url and command = skipped.
+    # HTTP example:
+    #   brave-search:
+    #     transport: http
+    #     url: https://example.com/mcp
+    #     headers:
+    #       Authorization: "Bearer ${BRAVE_API_KEY}"
+    #     timeout_ms: 30000
+    # stdio example:
+    #   filesystem:
+    #     transport: stdio
+    #     command: npx
+    #     args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    filesystem:
+      url: ""
+      description: "MCP filesystem server - read/write files within allowed directories."
+    brave-search:
+      url: ""
+      description: "Brave Search API - web search via MCP protocol."
+    fetch:
+      url: ""
+      description: "MCP fetch server - fetch web page content and convert to markdown."
+features:
+  # Feature flags gate runtime wiring (S3.1). memory=false skips SQLite store
+  # create / write / prompt injection. Set true once the learning loop is desired.
+  stage: false
+  skills: true
+  memory: true
+
+# Workflow settings (P0-4b: phase advancement + confirmation).
+# S2.8: default false so first-run plan stays draft until user says "confirm the plan".
+workflow:
+  auto_confirm: false
+
+# P1-7: Per-role model routing (override per avatar role).
+model_routing:
+  planner: ""      # default: use active_provider model
+  researcher: ""   # e.g. "gemini-2.5-flash" for cheap research
+  builder: ""      # e.g. "claude-opus-4-8" for best code gen
+  critic: ""       # e.g. "claude-sonnet-4-6" for review
+  synthesizer: ""  # e.g. "gemini-2.5-flash" for summarization
+
+# P1-7c: LLM request defaults.
+llm_defaults:
+  # Daily codegen request (not the model output maximum). Truncation recovery
+  # may escalate up to the harness ceiling (65536). Agnes clamps at 65536.
+  max_tokens: 16384
+  temperature: 0.0
+  top_p: 1.0
+  structured_output: false
+  # Batch4/H: CodeGen / default LLM HTTP timeout. Builder used to hardcode
+  # 180s while yaml said 120s — unify at 300s so multi-file gen can finish.
+  timeout_ms: 300000
+  # S5.7 / M-15: shell_done tool wall-clock timeout (was hardcoded 30s).
+  shell_done_timeout_ms: 120000
+  # Fallback providers in priority order when primary fails.
+  # G2/S5.4: When empty, primary failure is returned as-is (no silent
+  # deterministic placeholder for code gen). For production, set at least one:
+  #   fallback_providers: ["qwen", "deepseek"]
+  fallback_providers: []
+  # SP-Fix-3 / Batch4/H: Per-role max tool-calling turns.
+  # Builder Phase-1 scaffolds often need ~12–20 file writes + reads.
+  # 24 gives headroom; self-heal still escalates further on turn-cap/deadline (V6).
+  max_tool_turns_by_role:
+    builder: 24
+    critic: 8
+    synthesizer: 1
+    researcher: 5
+    planner: 5
+  # A2: Maximum concurrent avatars during parallel execution.
+  # Default: runtime.NumCPU() capped at 8. Set higher for IO-bound workloads.
+  max_parallel_avatars: 4

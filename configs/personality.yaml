@@ -1,0 +1,25 @@
+# Avatars personality profile. Configure response style, language, and
+# safety preferences. Injected into Synthesizer / Builder / Direct / DocEditor /
+# Critic plan-review prompts via personalityPromptFragment.
+#
+# All fields are optional; missing fields fall back to safe defaults.
+
+personality:
+  # Response style: "concise" (short, direct), "detailed" (thorough,
+  # markdown sections), or "balanced" (default).
+  style: balanced
+
+  # Preferred output language. Use ISO 639-1 codes or natural names.
+  # Examples: "zh-CN", "en", "ja", "Chinese", "English".
+  # Empty: match the operator request language (no hard-coded English).
+  # Set explicitly when you want a fixed language for all roles.
+  language: ""
+
+  # Safety posture: "strict" | "standard" | "permissive".
+  # Loaded/shown today; permission gating is not yet wired to this field.
+  safety: standard
+
+  # Operator identity string injected as a short phrase in the system
+  # prompt. Useful for cross-session continuity. Example: "Go backend
+  # developer working on avatars".
+  operator_context: ""
