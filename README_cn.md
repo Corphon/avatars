@@ -403,8 +403,6 @@ Set-Location .\sheetforge_for_Test
 | [docs/avatars.md](docs/avatars.md) | 架构与规划入口 |
 | [configs/cli_actions.yaml](configs/cli_actions.yaml) | LLM 有界动作表 |
 | [configs/agent.yaml.example](configs/agent.yaml.example) | 配置模板 |
-| [coding_plan.md](coding_plan.md) | 构建计划与开放项 |
-| [five_principle.md](five_principle.md) | Agent-native 五原则 |
 
 ## 贡献
 
