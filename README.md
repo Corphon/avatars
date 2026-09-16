@@ -415,8 +415,6 @@ Explicitly out of scope: rewriting `internal/runtime`, adding new roles, or publ
 | [docs/avatars.md](docs/avatars.md) | Architecture and planning entry |
 | [configs/cli_actions.yaml](configs/cli_actions.yaml) | LLM bounded action map |
 | [configs/agent.yaml.example](configs/agent.yaml.example) | Config template |
-| [coding_plan.md](coding_plan.md) | Build plan and open items |
-| [five_principle.md](five_principle.md) | Agent-native principles |
 
 ## Contributing
 
