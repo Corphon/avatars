@@ -79,3 +79,23 @@ func TestDiscoverExistingSurveyTargets_FindsGoMod(t *testing.T) {
 		t.Fatalf("unexpected targets: %v", got)
 	}
 }
+
+func TestDiscoverExistingSurveyTargets_FindsPythonWithoutManifest(t *testing.T) {
+	dir := t.TempDir()
+	cwd, _ := os.Getwd()
+	defer os.Chdir(cwd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll("booking", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("booking", "domain.py"), []byte("class Booking:\n    pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := discoverExistingSurveyTargets()
+	joined := strings.Join(got, ",")
+	if !strings.Contains(joined, "domain.py") {
+		t.Fatalf("python package without a manifest should be surveyed, got %v", got)
+	}
+}
