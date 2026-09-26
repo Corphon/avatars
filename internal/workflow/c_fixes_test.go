@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestFollowUpKeepsOriginalRequirement(t *testing.T) {
+	dir := t.TempDir()
+	original := "Build a local service in Python using the standard library."
+	if err := PersistUserRequirement(dir, original); err != nil {
+		t.Fatal(err)
+	}
+	follow := "接着写阶段 2，不要重新开一轮。还是同一个项目，只用标准库。把 HTTP 模块写出来。"
+	if err := PersistUserRequirement(dir, follow); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadUserRequirement(dir); got != original {
+		t.Fatalf("follow-up replaced the original: %q", got)
+	}
+	planText := RequirementForPlan(dir, follow)
+	if !strings.Contains(planText, original) || !strings.Contains(planText, "Follow-up:") {
+		t.Fatalf("planner text = %q", planText)
+	}
+	if got := LoadUserRequirement(dir); got != original {
+		t.Fatalf("plan prep replaced the original: %q", got)
+	}
+}
+
 func TestPhaseDocCoversUserRoutes(t *testing.T) {
 	user := `## Phase 1
 POST /rooms/{id}/slots
