@@ -18,8 +18,8 @@ type layoutCharter struct {
 }
 
 var (
-	phaseLibDirRe = regexp.MustCompile(`(?i)(?:top-?level|package(?:\s+path)?(?:\s+建议)?[:：]?\s*|lives at(?: the)?)\s*[\x60'"]?([a-z][\w-]*)/`)
-	phaseLibSuggestRe = regexp.MustCompile(`(?i)(?:包路径建议|package\s+path)\s*[:：]?\s*[\x60'"]?([a-z][\w-]+)`)
+	phaseLibDirRe      = regexp.MustCompile(`(?i)(?:top-?level|package(?:\s+path)?(?:\s+建议)?[:：]?\s*|lives at(?: the)?)\s*[\x60'"]?([a-z][\w-]*)/`)
+	phaseLibSuggestRe  = regexp.MustCompile(`(?i)(?:包路径建议|package\s+path)\s*[:：]?\s*[\x60'"]?([a-z][\w-]+)`)
 	phaseNotInternalRe = regexp.MustCompile(`(?i)NOT under\s*[\x60'"]?internal|不要(?:再)?进\s*internal|勿(?:再)?放(?:进|在)\s*internal|禁止.*internal/`)
 	bareDocRe          = regexp.MustCompile(`(?i)^doc\.go$`)
 )
@@ -192,7 +192,9 @@ func criticDirectorLayoutBrief(wd string) string {
 	c := resolveLayoutCharter(wd)
 	var b strings.Builder
 	b.WriteString("CRITIC LAYOUT CHARTER (obey; do not invent parallel trees):\n")
-	if c.LibraryDir != "" {
+	// Only a public-library task names a package directory. A program module
+	// (CLI/app) may keep helpers under a private dir named after the module.
+	if c.LibraryDir != "" && c.ForbidInternalLib {
 		libDir := filepath.Join(wd, c.LibraryDir)
 		if dirHasImplSources(libDir) {
 			b.WriteString(fmt.Sprintf("- Public library package dir: %s/\n", c.LibraryDir))
