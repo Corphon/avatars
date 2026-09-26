@@ -608,3 +608,47 @@ func TestReconcileUnmarksGoTestWhenSuiteFails(t *testing.T) {
 		t.Fatalf("phase1 still claims go test green:\n%s", phaseBody)
 	}
 }
+
+func TestCriteriaNamingMissingPathAreNotMarked(t *testing.T) {
+	dir := t.TempDir()
+	wf := filepath.Join(dir, "docs", "workflow")
+	if err := os.MkdirAll(filepath.Join(dir, "internal", "counter"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/linecount\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "internal", "counter", "counter.go"), []byte("package counter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "internal", "counter", "counter_test.go"), []byte("package counter\nimport \"testing\"\nfunc TestA(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := `# Project Plan
+> **Status**: in-progress
+> **Active Phase**: 1
+> **Phase Count**: 2
+
+## Success Criteria
+- [x] internal/counter and cmd/linecount are on disk and go test ./... passes
+- [ ] go test ./... passes with all unit tests green
+`
+	if err := os.WriteFile(filepath.Join(wf, "avatars_plan.md"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n := TryAutoMarkPlanCriteriaWithTests(dir, "implemented counter", []string{"internal/counter/counter.go"}, true, true)
+	body, err := os.ReadFile(filepath.Join(wf, "avatars_plan.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if strings.Contains(s, "- [x] internal/counter and cmd/linecount") {
+		t.Fatalf("missing cmd/linecount must not stay checked (marked=%d):\n%s", n, s)
+	}
+	if !strings.Contains(s, "- [x] go test") {
+		t.Fatalf("plain go test ./... should still check when the suite is green:\n%s", s)
+	}
+}
