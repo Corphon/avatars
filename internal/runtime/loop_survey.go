@@ -668,30 +668,30 @@ func discoverExistingSurveyTargets() []string {
 			add(path)
 		}
 	}
-	// Light walk for source entrypoints when a manifest exists.
-	if len(out) > 0 || fileExists("go.mod") || fileExists("package.json") {
-		_ = filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
-			if err != nil || len(out) >= 8 {
-				return filepath.SkipAll
-			}
-			if entry.IsDir() {
-				base := filepath.Base(path)
-				if path != "." && (base == ".git" || base == "node_modules" || base == "vendor" || base == ".avatars" || strings.HasPrefix(base, ".")) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			lower := strings.ToLower(path)
-			if strings.HasSuffix(lower, ".go") || strings.HasSuffix(lower, ".py") ||
-				strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".js") ||
-				strings.HasSuffix(lower, ".rs") {
-				if !strings.Contains(lower, "_test.") {
-					add(path)
-				}
+	// Light walk even when there is no go.mod or package.json. A stdlib
+	// Python or Java tree would otherwise be reported as empty.
+	_ = filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
+		if err != nil || len(out) >= 8 {
+			return filepath.SkipAll
+		}
+		if entry.IsDir() {
+			base := filepath.Base(path)
+			if path != "." && skipSourceWalkDir(base) {
+				return filepath.SkipDir
 			}
 			return nil
-		})
-	}
+		}
+		lower := strings.ToLower(path)
+		if strings.HasSuffix(lower, ".go") || strings.HasSuffix(lower, ".py") ||
+			strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".js") ||
+			strings.HasSuffix(lower, ".rs") || strings.HasSuffix(lower, ".java") ||
+			strings.HasSuffix(lower, ".cs") {
+			if !strings.Contains(lower, "_test.") {
+				add(path)
+			}
+		}
+		return nil
+	})
 	return out
 }
 
