@@ -73,9 +73,9 @@ func looksLikeLanguageTestCommand(command []string) bool {
 }
 
 type Runner struct {
-	workingDir     string
-	executor       Executor
-	checks         []CommandCheck
+	workingDir string
+	executor   Executor
+	checks     []CommandCheck
 	// P14-4a: Pre-existing error baseline — captured before the task runs.
 	// Maps check name → expected error output. When a check fails with output
 	// matching the baseline, it is downgraded from FAIL to PARTIAL (pre-existing).
@@ -268,27 +268,42 @@ func checkerAvailable(cmd string, _ ...string) bool {
 	return err == nil
 }
 
+const pythonSyntaxScript = `import os,py_compile,sys
+skip={'.git','node_modules','__pycache__','.venv','venv','.avatars','dist','build','target','.pytest_cache'}
+bad=False
+for r,ds,fs in os.walk('.'):
+ ds[:]=[d for d in ds if d not in skip and not d.startswith('.')]
+ for f in fs:
+  if not f.endswith('.py'):
+   continue
+  try:
+   py_compile.compile(os.path.join(r,f),doraise=True)
+  except py_compile.PyCompileError:
+   bad=True
+sys.exit(1 if bad else 0)
+`
+
 func pythonSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "python syntax",
-		Command: []string{"python", "-c", "import py_compile,os; all(not py_compile.compile(f,doredact=True) for f in (os.path.join(r,f) for r,_,fs in os.walk('.') for f in fs if f.endswith('.py')))"},
+		Name:     "python syntax",
+		Command:  []string{"python", "-c", pythonSyntaxScript},
 		Expected: "All Python files should have valid syntax.",
 		AllowPartial: func(output string, err error) (bool, string) {
 			if !checkerAvailable("python") && !checkerAvailable("python3") {
 				return true, "python not found — skipped"
 			}
 			if err != nil {
-				return true, "SKIPPED: " + output
+				return false, ""
 			}
-			return true, "" // partial if no error output (py_compile is noisy)
+			return false, ""
 		},
 	}
 }
 
 func jsSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "javascript syntax",
-		Command: []string{"node", "-e", "require('fs').readdirSync('.').filter(f=>f.endsWith('.js')).forEach(f=>{try{require('fs').readFileSync(f,'utf8');new Function(require('fs').readFileSync(f,'utf8'))}catch(e){if(e instanceof SyntaxError)throw e}})"},
+		Name:     "javascript syntax",
+		Command:  []string{"node", "-e", "require('fs').readdirSync('.').filter(f=>f.endsWith('.js')).forEach(f=>{try{require('fs').readFileSync(f,'utf8');new Function(require('fs').readFileSync(f,'utf8'))}catch(e){if(e instanceof SyntaxError)throw e}})"},
 		Expected: "All JS files should have valid syntax.",
 		AllowPartial: func(output string, err error) (bool, string) {
 			if !checkerAvailable("node") {
@@ -305,8 +320,8 @@ func jsSyntaxCheck(_ string) CommandCheck {
 func shellSyntaxCheck(_ string) CommandCheck {
 	shellBin, _ := platform.ShellCheckCommand()
 	return CommandCheck{
-		Name:    "shell syntax",
-		Command: []string{shellBin, "-n", "*.sh"},
+		Name:     "shell syntax",
+		Command:  []string{shellBin, "-n", "*.sh"},
 		Expected: "Shell scripts should have valid syntax.",
 		AllowPartial: func(output string, err error) (bool, string) {
 			if shellBin == "" || !checkerAvailable(shellBin) {
@@ -342,8 +357,8 @@ func sqlSyntaxCheck(_ string) CommandCheck {
 
 func htmlParseCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "html parse",
-		Command: []string{"python", "-c", "import html.parser,os; [html.parser.HTMLParser().feed(open(os.path.join(r,f),encoding='utf-8',errors='ignore').read()) for r,_,fs in os.walk('.') for f in fs if f.endswith(('.html','.htm'))]"},
+		Name:     "html parse",
+		Command:  []string{"python", "-c", "import html.parser,os; [html.parser.HTMLParser().feed(open(os.path.join(r,f),encoding='utf-8',errors='ignore').read()) for r,_,fs in os.walk('.') for f in fs if f.endswith(('.html','.htm'))]"},
 		Expected: "HTML files should be well-formed.",
 		Advisory: true,
 		AllowPartial: func(output string, err error) (bool, string) {
@@ -360,8 +375,8 @@ func htmlParseCheck(_ string) CommandCheck {
 
 func cssSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "css syntax",
-		Command: []string{"go", "run", "./cmd/csscheck/"},
+		Name:     "css syntax",
+		Command:  []string{"go", "run", "./cmd/csscheck/"},
 		Expected: "CSS files should have valid syntax (balanced braces, semicolons, no empty rulesets).",
 		AllowPartial: func(output string, err error) (bool, string) {
 			if !checkerAvailable("go") {
@@ -377,8 +392,8 @@ func cssSyntaxCheck(_ string) CommandCheck {
 
 func tsSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "typescript syntax",
-		Command: []string{"npx", "tsc", "--noEmit"},
+		Name:     "typescript syntax",
+		Command:  []string{"npx", "tsc", "--noEmit"},
 		Expected: "TypeScript files should compile without errors.",
 		AllowPartial: func(output string, err error) (bool, string) {
 			if !checkerAvailable("npx") {
@@ -454,8 +469,8 @@ func cargoFmtCheck(workingDir string) CommandCheck {
 
 func cSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "c syntax",
-		Command: []string{"gcc", "-fsyntax-only", "*.c"},
+		Name:     "c syntax",
+		Command:  []string{"gcc", "-fsyntax-only", "*.c"},
 		Expected: "C files should compile without syntax errors.",
 		AllowPartial: func(output string, err error) (bool, string) {
 			if !checkerAvailable("gcc") && !checkerAvailable("clang") {
@@ -471,8 +486,8 @@ func cSyntaxCheck(_ string) CommandCheck {
 
 func cppSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "c++ syntax",
-		Command: []string{"g++", "-fsyntax-only", "*.cpp"},
+		Name:     "c++ syntax",
+		Command:  []string{"g++", "-fsyntax-only", "*.cpp"},
 		Expected: "C++ files should compile without syntax errors.",
 		AllowPartial: func(output string, err error) (bool, string) {
 			if !checkerAvailable("g++") && !checkerAvailable("clang++") {
@@ -515,7 +530,7 @@ func (r Runner) Run(ctx context.Context) Report {
 	passCount := 0
 	partialCount := 0
 	baselinePartialCount := 0 // P14-5: pre-existing PARTIALs, distinct from new PARTIALs
-	advisoryPartialCount := 0  // P14-5: inherent PARTIALs from advisory checks
+	advisoryPartialCount := 0 // P14-5: inherent PARTIALs from advisory checks
 	newPartialCount := 0
 	failCount := 0
 
@@ -764,12 +779,16 @@ func workspaceHasGoSources(dir string) bool {
 
 func javaSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "java syntax",
-		Command: []string{"javac", "-d", "/tmp", "*.java"},
+		Name:     "java syntax",
+		Command:  []string{"javac", "-d", "/tmp", "*.java"},
 		Expected: "Java files should compile without errors.",
 		AllowPartial: func(output string, err error) (bool, string) {
-			if !checkerAvailable("javac") { return true, "javac not found — skipped" }
-			if err != nil { return true, "SKIPPED: " + output }
+			if !checkerAvailable("javac") {
+				return true, "javac not found — skipped"
+			}
+			if err != nil {
+				return true, "SKIPPED: " + output
+			}
 			return true, ""
 		},
 	}
@@ -777,12 +796,16 @@ func javaSyntaxCheck(_ string) CommandCheck {
 
 func csharpSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "c# syntax",
-		Command: []string{"dotnet", "build", "--no-restore"},
+		Name:     "c# syntax",
+		Command:  []string{"dotnet", "build", "--no-restore"},
 		Expected: "C# project should build without errors.",
 		AllowPartial: func(output string, err error) (bool, string) {
-			if !checkerAvailable("dotnet") { return true, "dotnet not found — skipped" }
-			if err != nil { return true, "SKIPPED: " + output }
+			if !checkerAvailable("dotnet") {
+				return true, "dotnet not found — skipped"
+			}
+			if err != nil {
+				return true, "SKIPPED: " + output
+			}
 			return true, ""
 		},
 	}
@@ -790,12 +813,16 @@ func csharpSyntaxCheck(_ string) CommandCheck {
 
 func rubySyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "ruby syntax",
-		Command: []string{"ruby", "-c", "*.rb"},
+		Name:     "ruby syntax",
+		Command:  []string{"ruby", "-c", "*.rb"},
 		Expected: "Ruby files should have valid syntax.",
 		AllowPartial: func(output string, err error) (bool, string) {
-			if !checkerAvailable("ruby") { return true, "ruby not found — skipped" }
-			if err != nil { return true, "SKIPPED: " + output }
+			if !checkerAvailable("ruby") {
+				return true, "ruby not found — skipped"
+			}
+			if err != nil {
+				return true, "SKIPPED: " + output
+			}
 			return true, ""
 		},
 	}
@@ -803,12 +830,16 @@ func rubySyntaxCheck(_ string) CommandCheck {
 
 func phpSyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "php syntax",
-		Command: []string{"php", "-l", "*.php"},
+		Name:     "php syntax",
+		Command:  []string{"php", "-l", "*.php"},
 		Expected: "PHP files should have valid syntax.",
 		AllowPartial: func(output string, err error) (bool, string) {
-			if !checkerAvailable("php") { return true, "php not found — skipped" }
-			if err != nil { return true, "SKIPPED: " + output }
+			if !checkerAvailable("php") {
+				return true, "php not found — skipped"
+			}
+			if err != nil {
+				return true, "SKIPPED: " + output
+			}
 			return true, ""
 		},
 	}
@@ -816,12 +847,16 @@ func phpSyntaxCheck(_ string) CommandCheck {
 
 func ps1SyntaxCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "powershell syntax",
-		Command: []string{"pwsh", "-NoProfile", "-Command", "Exit"},
+		Name:     "powershell syntax",
+		Command:  []string{"pwsh", "-NoProfile", "-Command", "Exit"},
 		Expected: "PowerShell scripts should be syntactically valid.",
 		AllowPartial: func(output string, err error) (bool, string) {
-			if !checkerAvailable("pwsh") && !checkerAvailable("powershell") { return true, "pwsh not found — skipped" }
-			if err != nil { return true, "SKIPPED: " + output }
+			if !checkerAvailable("pwsh") && !checkerAvailable("powershell") {
+				return true, "pwsh not found — skipped"
+			}
+			if err != nil {
+				return true, "SKIPPED: " + output
+			}
 			return true, ""
 		},
 	}
@@ -829,11 +864,13 @@ func ps1SyntaxCheck(_ string) CommandCheck {
 
 func configFileCheck(_ string) CommandCheck {
 	return CommandCheck{
-		Name:    "yaml/toml syntax",
-		Command: []string{"python", "-c", "import os; f=next((x for x in os.listdir('.') if x.endswith(('.yaml','.yml','.toml'))),None); print('no config files' if not f else 'found')"},
+		Name:     "yaml/toml syntax",
+		Command:  []string{"python", "-c", "import os; f=next((x for x in os.listdir('.') if x.endswith(('.yaml','.yml','.toml'))),None); print('no config files' if not f else 'found')"},
 		Expected: "Config files should be valid YAML/TOML.",
 		AllowPartial: func(output string, err error) (bool, string) {
-			if !checkerAvailable("python") && !checkerAvailable("python3") { return true, "python not found — skipped" }
+			if !checkerAvailable("python") && !checkerAvailable("python3") {
+				return true, "python not found — skipped"
+			}
 			return true, "yaml/toml check: manual review recommended"
 		},
 	}
