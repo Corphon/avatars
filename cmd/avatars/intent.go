@@ -89,6 +89,18 @@ func runIntent(args []string) error {
 	if routeErr != nil {
 		return routeErr
 	}
+	if handled && deterministicNLReason(route.Summary) {
+		switch route.Kind {
+		case naturalLanguageRouteDirectAnswer:
+			fmt.Println(route.Answer)
+			return nil
+		case naturalLanguageRouteClarify:
+			fmt.Printf("Clarify: %s\n", route.Question)
+			return nil
+		case naturalLanguageRouteSafeRun:
+			return executeIntentSafeRun(input, route.Summary, route.Command)
+		}
+	}
 	if handled {
 		switch route.Kind {
 		case naturalLanguageRouteDirectAnswer:
@@ -475,6 +487,10 @@ func printIntentChoices(input string, candidates []intentCandidate) {
 }
 
 func looksLikeImplementationWorkIntent(lowered string) bool {
+	// "Don't write code" names code only to forbid it. That is not a build request.
+	if looksLikeForbiddenMutationAsk(lowered) && !looksLikeProjectFollowUpQuestion(lowered) {
+		return false
+	}
 
 	// P4-3: "fix" token in analysis context (e.g., "find all FIXME")
 	// is not a code-fix request. Strip the false signal.
