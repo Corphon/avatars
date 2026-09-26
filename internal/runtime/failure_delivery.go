@@ -60,6 +60,7 @@ func reconcileFinalDeliveryAnswer(wd, status, synthText string, buildOK, buildOK
 	if status == "" {
 		status = "completed_unverified"
 	}
+	status = honestDeliveryStatus(wd, status)
 
 	finalRed := (buildOKKnown && !buildOK) || strings.TrimSpace(healthErr) != "" ||
 		status == "needs_remediation" || status == "failed"
@@ -74,7 +75,6 @@ func reconcileFinalDeliveryAnswer(wd, status, synthText string, buildOK, buildOK
 
 	contradicts := !finalRed && synthClaimsFail
 	missingPaths := claimedPathsMissingOnDisk(wd, synthText)
-	diskSources := listAuthoritativeSourcePaths(wd)
 
 	var b strings.Builder
 	b.WriteString("# Delivery Summary\n\n")
@@ -104,16 +104,16 @@ func reconcileFinalDeliveryAnswer(wd, status, synthText string, buildOK, buildOK
 	if strings.Contains(strings.ToLower(synthText), "max tool turns") ||
 		strings.Contains(strings.ToLower(synthText), "BUILDER NOTE: code generation hit max tool turns") {
 		if finalRed {
-			b.WriteString("- builder: max tool turns reached; compile/test still RED — not a green delivery (F76)\n")
+			b.WriteString("- builder: max tool turns reached; compile/test still RED — not a green delivery\n")
 		} else {
-			b.WriteString("- builder: max tool turns reached; delivery uses on-disk green files (F76)\n")
+			b.WriteString("- builder: max tool turns reached; delivery uses on-disk green files\n")
 		}
 	}
 	noToolchainLie, fixedLie := synthesizerHonestyFlags(synthText, healthErr, finalRed)
 
 	b.WriteString("\n## What Changed\n\n")
 	changed = reconcileChangedPathsToDisk(wd, changed)
-	writeExistingChangedBullets(&b, wd, mergeUniquePaths(changed, diskSources))
+	writeExistingChangedBullets(&b, wd, changed)
 	if len(missingPaths) > 0 {
 		b.WriteString("\n## Path Corrections\n\n")
 		b.WriteString("The model summary mentioned these paths that **do not exist on disk** (ignore them):\n\n")
@@ -131,7 +131,9 @@ func reconcileFinalDeliveryAnswer(wd, status, synthText string, buildOK, buildOK
 		b.WriteString("\n")
 	}
 	b.WriteString("\n## How to Verify\n\n")
-	b.WriteString("```bash\n# from the project workspace\ngo test ./...   # or pytest / npm test / cargo test\n```\n\n")
+	b.WriteString("```bash\n# from the project workspace\n")
+	b.WriteString(projectVerifyHint(wd))
+	b.WriteString("\n```\n\n")
 	if contradicts || len(missingPaths) > 0 || noToolchainLie || fixedLie {
 		b.WriteString("## Correction Note\n\n")
 		if contradicts {
@@ -141,17 +143,17 @@ func reconcileFinalDeliveryAnswer(wd, status, synthText string, buildOK, buildOK
 			b.WriteString("- The model summary invented file paths that are not on disk; **What Changed lists only files that exist**.\n")
 		}
 		if noToolchainLie {
-			b.WriteString("- The model claimed the language toolchain is missing, but final health actually ran compile/test; **trust health, do not hide a red gate behind 'no toolchain'** (F90).\n")
+			b.WriteString("- The model claimed the language toolchain is missing, but final health actually ran compile/test; **trust health, do not hide a red gate behind 'no toolchain'**.\n")
 		}
 		if fixedLie {
-			b.WriteString("- The model claimed the issue is already fixed (or that an edit tool was applied), but final health is still red; **do not call it fixed until the gate is green** (F90).\n")
+			b.WriteString("- The model claimed the issue is already fixed (or that an edit tool was applied), but final health is still red; **do not call it fixed until the gate is green**.\n")
 		}
 		b.WriteString("\n")
 	}
 	apiMismatches := detectMismatchedUsageExamples(wd, synthText)
 	if len(apiMismatches) > 0 {
 		b.WriteString("## Correct API\n\n")
-		b.WriteString("Model usage examples do not match on-disk exported signatures (F93). Use these:\n\n")
+		b.WriteString("Model usage examples do not match on-disk exported signatures. Use these:\n\n")
 		for _, line := range apiMismatches {
 			b.WriteString("- ")
 			b.WriteString(line)
@@ -163,9 +165,12 @@ func reconcileFinalDeliveryAnswer(wd, status, synthText string, buildOK, buildOK
 		if shouldOmitUnevidencedFallbackNotes(trimmed, status) {
 			b.WriteString("## Model Notes\n\n")
 			b.WriteString("Synthesis unavailable (provider billing/quota or empty synthesis). Fallback project-shape guesses were omitted because they are not evidence-backed.\n")
+		} else if len(missingPaths) > 0 {
+			b.WriteString("## Model Notes\n\n")
+			b.WriteString("Omitted. The model named files that are not on disk; see Path Corrections. What Changed lists only files that exist.\n")
 		} else {
 			b.WriteString("## Model Notes")
-			if contradicts || len(missingPaths) > 0 || noToolchainLie || fixedLie || len(apiMismatches) > 0 {
+			if contradicts || noToolchainLie || fixedLie || len(apiMismatches) > 0 {
 				b.WriteString(" (may be stale / path-hallucinated)")
 			}
 			b.WriteString("\n\n")
@@ -187,6 +192,91 @@ func reconcileFinalDeliveryAnswer(wd, status, synthText string, buildOK, buildOK
 	}
 	rewriteHumanDeliveryIfAnalysisTemplate(wd, b.String())
 	return nil
+}
+
+func projectVerifyHint(wd string) string {
+	has := func(name string) bool {
+		_, err := os.Stat(filepath.Join(wd, name))
+		return err == nil
+	}
+	switch {
+	case has("go.mod"):
+		return "go test ./..."
+	case has("Cargo.toml"):
+		return "cargo test"
+	case has("pyproject.toml") || has("setup.py") || has("pytest.ini"):
+		return "pytest"
+	case has("package.json"):
+		return "npm test"
+	case has("pom.xml"):
+		return "mvn -q test"
+	case has("build.gradle") || has("build.gradle.kts"):
+		return "gradle test"
+	}
+	entries, err := os.ReadDir(wd)
+	if err == nil {
+		for _, ent := range entries {
+			lower := strings.ToLower(ent.Name())
+			if strings.HasSuffix(lower, ".csproj") || strings.HasSuffix(lower, ".sln") {
+				return "dotnet test"
+			}
+		}
+	}
+	if hint := verifyHintFromSources(wd); hint != "" {
+		return hint
+	}
+	return "go test ./...  # or pytest / npm test / cargo test / dotnet test"
+}
+
+// verifyHintFromSources picks a test command when the tree has sources but
+// no manifest. A stdlib Python package has no pyproject.toml.
+func verifyHintFromSources(wd string) string {
+	switch languageFromSources(wd) {
+	case "python":
+		return "python -m unittest discover"
+	case "go":
+		return "go test ./..."
+	case "rust":
+		return "cargo test"
+	case "javascript", "typescript":
+		return "npm test"
+	case "java":
+		return "mvn -q test"
+	case "csharp":
+		return "dotnet test"
+	default:
+		return ""
+	}
+}
+
+// honestDeliveryStatus refuses to print "completed" while the plan is still
+// open, a later phase is active, or the active checklist is unfinished.
+// Language-agnostic: it reads workflow docs, not a source layout.
+func honestDeliveryStatus(wd, status string) string {
+	if status != "completed" {
+		return status
+	}
+	planPath := filepath.Join(wd, "docs", "workflow", "avatars_plan.md")
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return status
+	}
+	meta := workflow.ParsePlanMeta(string(data))
+	planStatus := strings.TrimSpace(meta.Status)
+	if planStatus != "" && !strings.EqualFold(planStatus, "completed") {
+		return "in_progress"
+	}
+	if meta.PhaseCount > 1 && meta.ActivePhase > 0 && meta.ActivePhase < meta.PhaseCount {
+		return "in_progress"
+	}
+	todoPath := filepath.Join(wd, workflow.DocPaths["todo"])
+	if todoBytes, err := os.ReadFile(todoPath); err == nil {
+		done, total := workflow.CountTodoProgressFromContent(string(todoBytes))
+		if total > 0 && done < total {
+			return "in_progress"
+		}
+	}
+	return status
 }
 
 func writePlanProgressSection(b *strings.Builder, wd string) {
@@ -321,8 +411,8 @@ func writeExistingChangedBullets(b *strings.Builder, wd string, paths []string) 
 	seen := map[string]bool{}
 	n := 0
 	for _, f := range paths {
-		f = filepath.ToSlash(strings.TrimSpace(f))
-		if f == "" || seen[f] {
+		f = filepath.ToSlash(filepath.Clean(strings.TrimSpace(f)))
+		if f == "" || f == "." || seen[f] {
 			continue
 		}
 		// Prefer project-relative; skip abs outside.
@@ -348,8 +438,84 @@ func writeExistingChangedBullets(b *strings.Builder, wd string, paths []string) 
 		b.WriteString("`\n")
 	}
 	if n == 0 {
-		b.WriteString("- (no verified on-disk source files recorded)\n")
+		b.WriteString("- No files were written this run.\n")
 	}
+}
+
+// alignDeliveryAnswerWithPlan rewrites the status line after phase advance.
+// The summary is written before the plan header flips to completed, so a
+// finished project would otherwise say in_progress next to "all phases done".
+func alignDeliveryAnswerWithPlan(wd string) {
+	wd = strings.TrimSpace(wd)
+	if wd == "" {
+		wd = "."
+	}
+	planPath := filepath.Join(wd, "docs", "workflow", "avatars_plan.md")
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return
+	}
+	meta := workflow.ParsePlanMeta(string(data))
+	answerPath := filepath.Join(wd, "answer.md")
+	body, err := os.ReadFile(answerPath)
+	if err != nil {
+		return
+	}
+	text := refreshDeliveryProgress(string(body), wd)
+	planDone := strings.EqualFold(strings.TrimSpace(meta.Status), "completed")
+	if planDone && meta.PhaseCount > 1 && meta.ActivePhase > 0 && meta.ActivePhase < meta.PhaseCount {
+		planDone = false
+	}
+	if planDone {
+		todoPath := filepath.Join(wd, workflow.DocPaths["todo"])
+		if todoBytes, err := os.ReadFile(todoPath); err == nil {
+			done, total := workflow.CountTodoProgressFromContent(string(todoBytes))
+			if total > 0 && done < total {
+				planDone = false
+			}
+		}
+	}
+	if planDone && !strings.Contains(text, "build_ok=false") {
+		text = strings.Replace(text, "**in_progress**", "**completed**", 1)
+		text = strings.Replace(text, "**completed_unverified**", "**completed**", 1)
+	}
+	if text == string(body) {
+		return
+	}
+	_ = os.WriteFile(answerPath, []byte(text), 0o644)
+}
+
+var (
+	activePhaseLineRe = regexp.MustCompile(`(?m)^- Active phase: .*$`)
+	checklistLineRe   = regexp.MustCompile(`(?m)^- Checklist: .*$`)
+)
+
+// refreshDeliveryProgress rewrites the progress lines from the plan and
+// checklist after phase advance. The summary is written earlier in the run.
+func refreshDeliveryProgress(text, wd string) string {
+	planPath := filepath.Join(wd, "docs", "workflow", "avatars_plan.md")
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return text
+	}
+	meta := workflow.ParsePlanMeta(string(data))
+	if meta.PhaseCount > 0 && activePhaseLineRe.MatchString(text) {
+		active := meta.ActivePhase
+		if active <= 0 {
+			active = 1
+		}
+		text = activePhaseLineRe.ReplaceAllString(text, fmt.Sprintf("- Active phase: %d of %d", active, meta.PhaseCount))
+	}
+	if checklistLineRe.MatchString(text) {
+		todoPath := filepath.Join(wd, workflow.DocPaths["todo"])
+		if todoBytes, err := os.ReadFile(todoPath); err == nil {
+			done, total := workflow.CountTodoProgressFromContent(string(todoBytes))
+			if total > 0 {
+				text = checklistLineRe.ReplaceAllString(text, fmt.Sprintf("- Checklist: %d/%d done", done, total))
+			}
+		}
+	}
+	return text
 }
 
 func claimedPathsMissingOnDisk(wd, text string) []string {
@@ -382,7 +548,50 @@ func claimedPathExistsOnDisk(wd, claimed string) bool {
 			return true
 		}
 	}
+	if !strings.Contains(filepath.ToSlash(claimed), "/") {
+		if rel := uniqueProjectBasename(wd, filepath.Base(claimed)); rel != "" {
+			return true
+		}
+	}
 	return false
+}
+
+// uniqueProjectBasename finds one on-disk source file with this base name.
+// A bare cli.py is not missing when booking/cli.py is the only match.
+func uniqueProjectBasename(wd, base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" || base == "." || strings.Contains(base, "/") || strings.Contains(base, "\\") {
+		return ""
+	}
+	switch strings.ToLower(filepath.Ext(base)) {
+	case ".py", ".go", ".rs", ".js", ".jsx", ".ts", ".tsx", ".java", ".cs", ".mjs", ".cjs":
+	default:
+		return ""
+	}
+	var found []string
+	_ = filepath.WalkDir(wd, func(path string, d os.DirEntry, err error) error {
+		if err != nil || len(found) > 1 {
+			return nil
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path != wd && skipSourceWalkDir(name) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.EqualFold(name, base) {
+			rel, relErr := filepath.Rel(wd, path)
+			if relErr == nil && !strings.HasPrefix(rel, "..") {
+				found = append(found, filepath.ToSlash(rel))
+			}
+		}
+		return nil
+	})
+	if len(found) == 1 {
+		return found[0]
+	}
+	return ""
 }
 
 func claimedPathCandidates(claimed string) []string {
