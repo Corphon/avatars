@@ -8,7 +8,7 @@ import (
 	"avatars/internal/runtime"
 )
 
-// C1.1: NL route dry-run (avatars route), separate from runTask.
+// NL route dry-run (avatars route), separate from runTask.
 func runRoute(args []string) error {
 	options, err := parseRouteOptions(args)
 	if err != nil {
