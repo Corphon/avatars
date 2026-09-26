@@ -87,6 +87,9 @@ func (e *Engine) runOnce(ctx context.Context, input string, restored *transcript
 	defer llm.ClearPathRewriteHandler()
 	// J2-1: tool-loop writes share Builder checkFileHealth (JS/TS/Py/Rs/Go).
 	llm.SetWriteHealthChecker(func(path, content string) error {
+		if reason := rejectToolWrite(path, e.layoutTaskHint); reason != "" {
+			return fmt.Errorf("write rejected: %s", reason)
+		}
 		if forbidsCLIScaffold(strings.ToLower(e.layoutTaskHint)) && isForbiddenCLIEntrypointPath(path) {
 			return fmt.Errorf("CLI/entrypoint blocked by no-CLI constraint")
 		}
@@ -285,6 +288,12 @@ func (e *Engine) runOnce(ctx context.Context, input string, restored *transcript
 			if autoMarked := workflow.TryAutoMarkDone(projectRoot, result.Summary, deliveryFiles, input); autoMarked > 0 {
 				_ = e.emit(runID, taskID, "", "reviewing", "workflow.tasks_marked", "runtime", map[string]any{"count": autoMarked}, nil)
 			}
+			// A prose task next to already-checked path tasks is bookkeeping.
+			// Groups that are still (0/N), with no checked path task, stay open.
+			if proseMarked := workflow.MarkProseTasksBesideDonePaths(projectRoot); proseMarked > 0 {
+				_ = workflow.SyncTodoFromPlan(projectRoot)
+				_ = e.emit(runID, taskID, "", "reviewing", "workflow.tasks_marked", "runtime", map[string]any{"count": proseMarked, "kind": "prose_beside_paths"}, nil)
+			}
 		}
 		if !planningAbort && !remediationHold {
 			if criteriaMarked := workflow.TryAutoMarkPlanCriteriaWithTests(projectRoot, result.Summary, deliveryFiles, buildOK, testOK, input); criteriaMarked > 0 {
@@ -300,6 +309,13 @@ func (e *Engine) runOnce(ctx context.Context, input string, restored *transcript
 		if planSynced := workflow.SyncPhaseCriteriaMarksToPlan(projectRoot); planSynced > 0 {
 			_ = e.emit(runID, taskID, "", "reviewing", "workflow.plan_criteria_synced", "runtime", map[string]any{"count": planSynced}, nil)
 		}
+		// A failed confirm leaves the header at draft. A later run that writes
+		// sources, or that has already moved past phase 1, should not keep that label.
+		if !planningAbort {
+			_ = workflow.MarkDraftInProgress(projectRoot, len(deliveryFiles) > 0)
+		}
+		// Phase docs are often filled during the run, after the start-of-run tag.
+		_, _ = workflow.SyncPhaseDocsProcessTag(projectRoot)
 		// C2: one CriticDecide. If Critic already applied, defer only copies/upgrades.
 		phaseDocsOK := workflow.PhaseDocsComplete(projectRoot)
 		lock := e.lockedPhase
@@ -390,6 +406,11 @@ func (e *Engine) runOnce(ctx context.Context, input string, restored *transcript
 		}
 		// S2.6: Regenerate process_record.md from SQLite (export only).
 		_ = workflow.RegenerateRecordMarkdownFromSQLite(projectRoot)
+		// Phase docs are the checklist source. Refresh once more so a parent
+		// row cannot stay at (0/N) after the phase file's tasks were checked.
+		_ = workflow.SyncTodoFromPlan(projectRoot)
+		// The delivery file is written before this defer flips the plan header.
+		alignDeliveryAnswerWithPlan(projectRoot)
 
 		// Authoritative end-of-run footer (after phase sync/advance).
 		footerStatus := status
@@ -890,6 +911,9 @@ func (e *Engine) runOnce(ctx context.Context, input string, restored *transcript
 				return RunResult{}, err
 			}
 			if listing.AlwaysOn {
+				if !alwaysOnSkillApplies(listing.Name, input) {
+					continue
+				}
 				definition, err := e.skills.LoadApproved(listing.Path)
 				if err != nil {
 					return RunResult{}, err
@@ -2777,6 +2801,13 @@ func (e *Engine) makeWorkflowGenerate(ctx context.Context, timeout time.Duration
 		}
 		started := time.Now()
 		resp, err := e.llm.Generate(cctx, req)
+		if err != nil && cctx.Err() == nil && transientWorkflowLLMError(err) {
+			_ = e.emit(runID, taskID, "", "planning", "workflow.llm.retry", "runtime", map[string]any{
+				"purpose": purpose,
+				"error":   err.Error(),
+			}, nil)
+			resp, err = e.llm.Generate(cctx, req)
+		}
 		elapsed := time.Since(started).Milliseconds()
 		if err != nil {
 			failPayload := map[string]any{
@@ -2815,6 +2846,28 @@ func (e *Engine) makeWorkflowGenerate(ctx context.Context, timeout time.Duration
 		_ = e.emit(runID, taskID, "", "planning", "workflow.llm.completed", "runtime", donePayload, nil)
 		return text, nil
 	}
+}
+
+// transientWorkflowLLMError is a dropped connection, not a bad plan.
+// The retry sends the same prompt so a prefix cache can still hit.
+func transientWorkflowLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "context canceled") || strings.Contains(s, "context cancelled") ||
+		strings.Contains(s, "deadline exceeded") {
+		return false
+	}
+	for _, n := range []string{
+		"connection reset", "forcibly closed", "wsarecv", "broken pipe",
+		"connection refused", "unexpected eof",
+	} {
+		if strings.Contains(s, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // executePlanConstructor fills avatars_plan.md from a user requirement using
