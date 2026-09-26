@@ -841,3 +841,112 @@ func writeExportBullets(b *strings.Builder, items []string) {
 		b.WriteByte('\n')
 	}
 }
+
+var phaseTaskFileRe = regexp.MustCompile(`(?i)[\w./\\-]+\.(?:go|py|rs|js|jsx|ts|tsx|mjs|cjs|java|cs)\b`)
+var phaseTaskZeroCountRe = regexp.MustCompile(`\(\s*0\s*/\s*\d+\s*\)`)
+
+// MarkProseTasksBesideDonePaths checks a task that names no file when every
+// file-named task in the same group is already checked. A group with no
+// checked file task, including a bare (0/N) row, is left open. Build health
+// is the caller's gate.
+func MarkProseTasksBesideDonePaths(projectRoot string) int {
+	marked := 0
+	for n := 1; n <= 12; n++ {
+		path := filepath.Join(projectRoot, "docs", "workflow", fmt.Sprintf("phase%d.md", n))
+		body, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		next, nMarked := markProseTasksInPhase(string(body))
+		if nMarked == 0 || next == string(body) {
+			continue
+		}
+		if err := WriteFileAtomic(path, []byte(next), 0o644); err != nil {
+			continue
+		}
+		marked += nMarked
+	}
+	return marked
+}
+
+func markProseTasksInPhase(body string) (string, int) {
+	lines := strings.Split(body, "\n")
+	inTasks := false
+	var group []int
+	marked := 0
+	flush := func() {
+		if len(group) == 0 {
+			return
+		}
+		marked += markProseGroup(lines, group)
+		group = nil
+	}
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") {
+			flush()
+			inTasks = strings.Contains(strings.ToLower(trimmed), "task")
+			continue
+		}
+		if !inTasks {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "### ") {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- [ ]") || strings.HasPrefix(trimmed, "- [>]") ||
+			strings.HasPrefix(trimmed, "- [x]") || strings.HasPrefix(trimmed, "- [X]") {
+			group = append(group, i)
+		}
+	}
+	flush()
+	if marked == 0 {
+		return body, 0
+	}
+	return strings.Join(lines, "\n"), marked
+}
+
+func markProseGroup(lines []string, idxs []int) int {
+	pathTotal, pathDone := 0, 0
+	for _, i := range idxs {
+		if !phaseTaskFileRe.MatchString(lines[i]) {
+			continue
+		}
+		pathTotal++
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "- [x]") || strings.HasPrefix(trimmed, "- [X]") {
+			pathDone++
+		}
+	}
+	if pathTotal == 0 || pathDone != pathTotal {
+		return 0
+	}
+	n := 0
+	for _, i := range idxs {
+		trimmed := strings.TrimSpace(lines[i])
+		open := strings.HasPrefix(trimmed, "- [ ]") || strings.HasPrefix(trimmed, "- [>]")
+		if !open || phaseTaskFileRe.MatchString(lines[i]) || proseTaskMustStayOpen(lines[i]) {
+			continue
+		}
+		lines[i] = markCheckboxDone(lines[i])
+		n++
+	}
+	return n
+}
+
+func proseTaskMustStayOpen(line string) bool {
+	if phaseTaskZeroCountRe.MatchString(line) {
+		return true
+	}
+	lower := strings.ToLower(line)
+	if strings.Contains(line, "手动") || strings.Contains(lower, "manual") {
+		return true
+	}
+	for _, cmd := range []string{"go test", "go build", "pytest", "npm test", "cargo test", "dotnet test", "mvn ", "gradle "} {
+		if strings.Contains(lower, cmd) {
+			return true
+		}
+	}
+	return false
+}
