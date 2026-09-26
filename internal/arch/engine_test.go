@@ -45,6 +45,31 @@ func TestScanProject_SkipsFixtureAndReferenceTrees(t *testing.T) {
 	}
 }
 
+func TestScanProject_RootNamedForTestIsScanned(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "widget_for_test")
+	writeTree(t, root, map[string]string{
+		"go.mod":                    "module example.com/widget\n",
+		"cmd/server/main.go":        "package main\nfunc main() {}\n",
+		"internal/store/store.go":   "package store\n",
+		"nested_for_test/secret.go": "package secret\n",
+	})
+	scan, err := ScanProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := filepath.ToSlash(strings.Join(scan.FileTree, "\n"))
+	if !strings.Contains(joined, "go.mod") || !strings.Contains(joined, "cmd/server/main.go") || !strings.Contains(joined, "internal/store/store.go") {
+		t.Fatalf("root named *_for_test must still scan its own sources, got %v", scan.FileTree)
+	}
+	if strings.Contains(joined, "secret.go") || strings.Contains(joined, "nested_for_test") {
+		t.Fatalf("nested fixture dir must stay skipped, got %v", scan.FileTree)
+	}
+	if len(scan.EntryCandidates) == 0 {
+		t.Fatal("expected an entry candidate under cmd/")
+	}
+}
+
 func TestScanProject_SkipsHarnessRuntimeLogs(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
@@ -223,6 +248,29 @@ func TestParseArchDoc_JSONAndFencedBlock(t *testing.T) {
 	}
 }
 
+func TestScanProject_LibraryServerIsNotAnEntry(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"api/server.go":      "package api\n\nfunc NewServer() {}\n",
+		"cmd/ledger/main.go": "package main\n\nimport \"net/http\"\n\nfunc main() { http.ListenAndServe(\":8080\", nil) }\n",
+	})
+	scan, err := ScanProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, ec := range scan.EntryCandidates {
+		paths = append(paths, filepath.ToSlash(ec.Path))
+		if filepath.ToSlash(ec.Path) == "api/server.go" {
+			t.Fatalf("library server.go must not be an entry: %+v", ec)
+		}
+	}
+	joined := strings.Join(paths, "\n")
+	if !strings.Contains(joined, "cmd/ledger/main.go") {
+		t.Fatalf("cmd entry missing: %v", paths)
+	}
+}
+
 func TestNewScanForInit_EmptyProject(t *testing.T) {
 	scan := NewScanForInit(t.TempDir())
 	if scan == nil {
@@ -369,5 +417,44 @@ func TestStaleReasonString(t *testing.T) {
 	}
 	if !strings.Contains(StaleEntryMtime.String(), "entry point") {
 		t.Fatalf("entry: %q", StaleEntryMtime.String())
+	}
+}
+
+func TestScanSkipsEmptyDirAndHashesSources(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"booking/domain.py": "class Booking:\n    pass\n",
+		"notes.log":         "noise\n",
+	})
+	if err := os.MkdirAll(filepath.Join(dir, "tools_make_bookings"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scan, err := ScanProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range scan.KeyDirNames {
+		if name == "tools_make_bookings" {
+			t.Fatal("empty directory should not be a layer")
+		}
+	}
+	foundDomain := false
+	for _, f := range scan.FileTree {
+		if strings.HasSuffix(f, "domain.py") {
+			foundDomain = true
+		}
+		if strings.HasSuffix(f, ".log") {
+			t.Fatalf("log file scanned: %s", f)
+		}
+	}
+	if !foundDomain {
+		t.Fatal("domain.py should be in the scan")
+	}
+	files := scan.KeyFiles()
+	if len(files) == 0 {
+		t.Fatal("source files should feed the fingerprint when there is no entry")
+	}
+	if fp := ComputeFingerprint(dir, files); fp == "" || fp == "e3b0c44298fc1c14" {
+		t.Fatalf("fingerprint = %q", fp)
 	}
 }
