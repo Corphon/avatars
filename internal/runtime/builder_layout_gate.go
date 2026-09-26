@@ -342,10 +342,8 @@ func countProjectSourceFiles(wd string) int {
 	n := 0
 	_ = filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || info.IsDir() {
-			if info != nil && info.IsDir() {
-				if projectfiles.ShouldSkipWalkDir(info.Name()) {
-					return filepath.SkipDir
-				}
+			if info != nil && info.IsDir() && path != wd && projectfiles.ShouldSkipWalkDir(info.Name()) {
+				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -464,10 +462,8 @@ func healthEndpointPresentInTree(wd string) bool {
 	found := false
 	_ = filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || info.IsDir() {
-			if info != nil && info.IsDir() {
-				if projectfiles.ShouldSkipWalkDir(info.Name()) {
-					return filepath.SkipDir
-				}
+			if info != nil && info.IsDir() && path != wd && projectfiles.ShouldSkipWalkDir(info.Name()) {
+				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -499,10 +495,8 @@ func healthPayloadLooksOK(wd string) bool {
 	ok := false
 	_ = filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || info.IsDir() {
-			if info != nil && info.IsDir() {
-				if projectfiles.ShouldSkipWalkDir(info.Name()) {
-					return filepath.SkipDir
-				}
+			if info != nil && info.IsDir() && path != wd && projectfiles.ShouldSkipWalkDir(info.Name()) {
+				return filepath.SkipDir
 			}
 			return nil
 		}
