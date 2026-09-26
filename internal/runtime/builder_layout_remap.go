@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"avatars/internal/workflow"
 )
 
 // sanitizeBuilderPathsForTask is like sanitizeBuilderPaths but uses task hints
@@ -32,8 +34,8 @@ func sanitizeBuilderPathsForTask(files []builderCodeFile, taskInput string) (kep
 		if mapped, rej := directorMapTarget(charter, ".", path); rej == "" && mapped != "" && mapped != path {
 			path = mapped
 		}
-		path = unburyModuleNamedInternalPathAt(".", path)
-		if lifted := liftPrivateDirPublicAPIAt(".", path, f.Content); lifted != "" {
+		path = unburyModuleNamedInternalPathAt(".", path, taskInput)
+		if lifted := liftPrivateDirPublicAPIAt(".", path, f.Content, taskInput); lifted != "" {
 			path = lifted
 		}
 
@@ -57,6 +59,15 @@ func sanitizeBuilderPathsForTask(files []builderCodeFile, taskInput string) (kep
 		// C10: junk scaffold entrypoints.
 		if isJunkScaffoldPath(path) {
 			dropped = append(dropped, orig+" (junk scaffold blocked)")
+			continue
+		}
+		// A Go/Python/Rust/Java/C# project must not keep a source file from
+		// another language unless the task names that path or language.
+		// Check both the original path and the remapped path: a root
+		// bookmarks.js may be moved under a package dir before this check.
+		if offLanguageSourceReason(path, lowerTask, layout.lang) != "" &&
+			offLanguageSourceReason(orig, lowerTask, layout.lang) != "" {
+			dropped = append(dropped, orig+" (source language is outside the project)")
 			continue
 		}
 		// F64: user forbade CLI / executable scaffold — drop root mains and cmd/.
@@ -105,7 +116,8 @@ func sanitizeBuilderPathsForTask(files []builderCodeFile, taskInput string) (kep
 type declaredLayout struct {
 	root          string // app | internal | src | ""
 	lang          string // go | python | javascript | typescript | rust | ""
-	topMigrations bool   // R7-2: prefer migrations/ over internal/**/migrations/
+	topMigrations bool   // prefer migrations/ over nested migrations/
+	entry         string // Go CLI dir, e.g. cmd/server or cmd/<module>
 }
 
 // detectDeclaredLayout infers layout root from task text + on-disk manifests.
@@ -155,18 +167,18 @@ func detectDeclaredLayout(taskInput string) declaredLayout {
 	switch {
 	case lang == "go" || (fileExists("go.mod") && lang != "python" && lang != "javascript" && lang != "typescript" && lang != "rust"):
 		if explicitApp && !explicitInternal {
-			return declaredLayout{root: "app", lang: "go", topMigrations: topMig}
+			return declaredLayout{root: "app", lang: "go", topMigrations: topMig, entry: goCLIEntryRel(lower)}
 		}
-		// F52: public/library-first Go must not default-bury under internal/.
+		// Public/library-first Go must not default-bury under internal/.
 		// Negative wording like "禁止 internal/" also contains "internal/" —
 		// do not treat that as a request for a service tree.
 		if wantsPublicLibraryLayout(lower) {
-			return declaredLayout{root: "", lang: "go", topMigrations: topMig}
+			return declaredLayout{root: "", lang: "go", topMigrations: topMig, entry: goCLIEntryRel(lower)}
 		}
 		if explicitInternal || goInternalIsServiceTreeAt(".") || wantsGoServiceInternalLayout(lower) {
-			return declaredLayout{root: "internal", lang: "go", topMigrations: topMig}
+			return declaredLayout{root: "internal", lang: "go", topMigrations: topMig, entry: goCLIEntryRel(lower)}
 		}
-		return declaredLayout{root: "", lang: "go", topMigrations: topMig}
+		return declaredLayout{root: "", lang: "go", topMigrations: topMig, entry: goCLIEntryRel(lower)}
 	case lang == "rust" || (fileExists("Cargo.toml") && lang == ""):
 		return declaredLayout{root: "src", lang: "rust", topMigrations: topMig}
 	case lang == "javascript" || lang == "typescript" ||
@@ -188,7 +200,7 @@ func detectDeclaredLayout(taskInput string) declaredLayout {
 			return declaredLayout{root: "app", lang: lang, topMigrations: topMig}
 		}
 		if explicitInternal {
-			return declaredLayout{root: "internal", lang: lang, topMigrations: topMig}
+			return declaredLayout{root: "internal", lang: lang, topMigrations: topMig, entry: goCLIEntryRel(lower)}
 		}
 		if explicitSrc {
 			return declaredLayout{root: "src", lang: lang, topMigrations: topMig}
@@ -213,9 +225,16 @@ func wantsPublicLibraryLayout(lower string) bool {
 }
 
 // forbidsCLIScaffold detects negative constraints against shipping a CLI /
-// executable scaffold (F64, cross-language). When true, root mains and cmd/
+// executable scaffold (cross-language). When true, root mains and cmd/
 // entrypoints are dropped unless the task also explicitly requests them.
+//
+// "standard library only" means no third-party dependencies. It must not
+// match the "library only" delivery needle.
 func forbidsCLIScaffold(lower string) bool {
+	lower = strings.ToLower(lower)
+	lower = strings.ReplaceAll(lower, "standard library only", " ")
+	lower = strings.ReplaceAll(lower, "std library only", " ")
+	lower = strings.ReplaceAll(lower, "stdlib only", " ")
 	return containsAnyFold(lower,
 		"no cli", "without cli", "without a cli", "don't create a cli", "do not create a cli",
 		"no command-line", "no command line", "library only", "library-only",
@@ -287,6 +306,71 @@ func wantsGoServiceInternalLayout(lower string) bool {
 	)
 }
 
+// goCLIEntryRel is the directory for a Go main package.
+// HTTP/server tasks use cmd/server. Other CLIs use the module name, then cmd/cli.
+// Same rule for every language that emits a Go entrypoint; Python/Rust/JS stay on their own trees.
+func goCLIEntryRel(lowerTask string) string {
+	if looksLikeHTTPServiceTask(lowerTask) {
+		return "cmd/server"
+	}
+	if dest := preferredExistingGoCmdDir(); dest != "" {
+		return dest
+	}
+	if mod := sanitizeCLIDirName(goModuleDirName()); mod != "" {
+		return "cmd/" + mod
+	}
+	return "cmd/cli"
+}
+
+func looksLikeHTTPServiceTask(lower string) bool {
+	return containsAnyFold(lower,
+		"http", "https", "rest api", "microservice", "web server", "http server",
+		"cmd/server", "cmd\\server", "grpc", "graphql",
+	)
+}
+
+func sanitizeCLIDirName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || name == "." || name == ".." {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Trim(b.String(), "-_")
+	if out == "" || out == "internal" || out == "cmd" {
+		return ""
+	}
+	return out
+}
+
+// preferredExistingGoCmdDir returns cmd/<only-child> when cmd/ has exactly one subdirectory.
+func preferredExistingGoCmdDir() string {
+	if !dirExists("cmd") {
+		return ""
+	}
+	ents, err := os.ReadDir("cmd")
+	if err != nil {
+		return ""
+	}
+	kids := make([]string, 0, 2)
+	for _, e := range ents {
+		name := e.Name()
+		if !e.IsDir() || name == "" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		kids = append(kids, name)
+	}
+	if len(kids) != 1 {
+		return ""
+	}
+	return "cmd/" + kids[0]
+}
+
 func wantsTopLevelMigrations(lowerTask string) bool {
 	if strings.Contains(lowerTask, "internal/storage/migrations") {
 		return false
@@ -296,6 +380,214 @@ func wantsTopLevelMigrations(lowerTask string) bool {
 		strings.Contains(lowerTask, "、migrations") ||
 		strings.Contains(lowerTask, ",migrations") ||
 		strings.Contains(lowerTask, " migrations")
+}
+
+func sourceLangOfPath(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".go":
+		return "go"
+	case ".py":
+		return "python"
+	case ".rs":
+		return "rust"
+	case ".js", ".jsx", ".mjs", ".cjs":
+		return "javascript"
+	case ".ts", ".tsx":
+		return "typescript"
+	case ".java":
+		return "java"
+	case ".cs":
+		return "csharp"
+	default:
+		return ""
+	}
+}
+
+func declaredLangAllowsSource(layoutLang, fileLang string) bool {
+	if layoutLang == "" || fileLang == "" || layoutLang == fileLang {
+		return true
+	}
+	web := func(lang string) bool { return lang == "javascript" || lang == "typescript" }
+	return web(layoutLang) && web(fileLang)
+}
+
+func taskNamesPath(task, path string) bool {
+	slash := strings.ToLower(filepath.ToSlash(path))
+	return slash != "" && strings.Contains(strings.ToLower(task), slash)
+}
+
+func taskRequestsFileLang(task, fileLang string) bool {
+	lower := strings.ToLower(task)
+	switch fileLang {
+	case "javascript":
+		return containsAnyFold(lower, "javascript", "node.js", "nodejs", ".mjs", ".cjs", ".jsx")
+	case "typescript":
+		return containsAnyFold(lower, "typescript", ".ts", ".tsx")
+	case "python":
+		return containsAnyFold(lower, "python", ".py")
+	case "rust":
+		return containsAnyFold(lower, "rust", "cargo", ".rs")
+	case "java":
+		return containsAnyFold(lower, "java ", ".java")
+	case "csharp":
+		return containsAnyFold(lower, "c#", "csharp", ".cs")
+	case "go":
+		return containsAnyFold(lower, "golang", "用 go", "用go", ".go")
+	default:
+		return false
+	}
+}
+
+// rejectToolWrite stops a tool write that would land a second workflow
+// checklist, or a source file in a language the project did not ask for.
+// JSON, Markdown, and SQL stay. A path or language named in the task stays.
+// An empty reason means the write may proceed.
+func rejectToolWrite(path, task string) string {
+	if isProtectedWorkflowManifest(path) {
+		return "workflow checklist and plan stay under docs/workflow and are not written by write_file"
+	}
+	layout := detectDeclaredLayout(task)
+	lang := layout.lang
+	if lang == "" {
+		lang = detectLanguageFromDisk()
+	}
+	if lang == "" {
+		lang = languageFromSources(".")
+	}
+	if lang == "" {
+		if wd, err := os.Getwd(); err == nil {
+			lang = detectTargetLanguage(workflow.LoadUserRequirement(wd))
+		}
+	}
+	return offLanguageSourceReason(path, strings.ToLower(task), lang)
+}
+
+// languageFromSources reports the language of a tree that has no manifest.
+// A tie (two languages with the same count) returns "" so a mixed tree is
+// not locked to the wrong one. JSON and Markdown are not source languages.
+func languageFromSources(root string) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		root = "."
+	}
+	counts := map[string]int{}
+	n := 0
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || n >= 40 {
+			return nil
+		}
+		base := d.Name()
+		if d.IsDir() {
+			if path != root && skipSourceWalkDir(base) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(base)) {
+		case ".go":
+			counts["go"]++
+		case ".py":
+			counts["python"]++
+		case ".rs":
+			counts["rust"]++
+		case ".java":
+			counts["java"]++
+		case ".cs":
+			counts["csharp"]++
+		case ".ts", ".tsx":
+			counts["typescript"]++
+		case ".js", ".jsx", ".mjs", ".cjs":
+			counts["javascript"]++
+		default:
+			return nil
+		}
+		n++
+		return nil
+	})
+	best, bestN := "", 0
+	tie := false
+	for lang, c := range counts {
+		if c > bestN {
+			best, bestN, tie = lang, c, false
+		} else if c == bestN {
+			tie = true
+		}
+	}
+	if bestN == 0 || tie {
+		return ""
+	}
+	return best
+}
+
+func skipSourceWalkDir(name string) bool {
+	switch strings.ToLower(name) {
+	case ".git", ".avatars", "node_modules", "vendor", "dist", "build", "target",
+		"__pycache__", ".pytest_cache", ".venv", "venv":
+		return true
+	}
+	return strings.HasPrefix(name, ".")
+}
+
+// offLanguageSourceReason rejects a source file whose language is outside the
+// project. JSON, Markdown, and SQL are not source languages and stay. The
+// task can still name a path or language explicitly.
+func offLanguageSourceReason(path, lowerTask, layoutLang string) string {
+	fileLang := sourceLangOfPath(path)
+	if fileLang == "" || declaredLangAllowsSource(layoutLang, fileLang) {
+		return ""
+	}
+	if taskNamesPath(lowerTask, path) || taskRequestsFileLang(lowerTask, fileLang) {
+		return ""
+	}
+	return "source language is outside the project"
+}
+
+// rootEntryAlreadyCovered reports that a root main/index file is already
+// represented by a conventional nested entry, so a second copy should not be
+// stubbed. Go: cmd/**/main.go. Python: app/main.py or src/main.py. Rust:
+// src/main.rs. JS/TS: src/<same name>.
+func rootEntryAlreadyCovered(wd, rel string, generated map[string]bool) bool {
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	if rel == "" || filepath.Dir(rel) != "." {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(rel))
+	has := func(p string) bool {
+		if generated[p] {
+			return true
+		}
+		_, err := os.Stat(filepath.Join(wd, filepath.FromSlash(p)))
+		return err == nil
+	}
+	switch base {
+	case "main.go":
+		if has("cmd/server/main.go") || has("cmd/cli/main.go") {
+			return true
+		}
+		entries, err := os.ReadDir(filepath.Join(wd, "cmd"))
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			if e.IsDir() && has("cmd/"+e.Name()+"/main.go") {
+				return true
+			}
+		}
+		for p := range generated {
+			if strings.HasPrefix(p, "cmd/") && strings.HasSuffix(p, "/main.go") {
+				return true
+			}
+		}
+		return false
+	case "main.py":
+		return has("app/main.py") || has("src/main.py")
+	case "main.rs":
+		return has("src/main.rs")
+	case "main.js", "index.js", "main.ts", "index.ts":
+		return has("src/" + base)
+	default:
+		return false
+	}
 }
 
 func langOr(lang, fallback string) string {
@@ -392,7 +684,7 @@ func remapToDeclaredLayout(path string, layout declaredLayout) string {
 	case "app":
 		return remapIntoApp(path, parts, base, stem, ext)
 	case "internal":
-		return remapIntoInternal(path, parts, base, stem, ext)
+		return remapIntoInternal(path, parts, base, stem, ext, layout)
 	case "src":
 		return remapIntoSrc(path, parts, base, stem, ext, layout.lang)
 	default:
@@ -429,7 +721,7 @@ func remapIntoApp(path string, parts []string, base, stem, ext string) string {
 	return path
 }
 
-func remapIntoInternal(path string, parts []string, base, stem, ext string) string {
+func remapIntoInternal(path string, parts []string, base, stem, ext string, layout declaredLayout) string {
 	if len(parts) > 0 && preserveTopLevelPackage(parts[0], declaredLayout{root: "internal", lang: "go"}) {
 		return path
 	}
@@ -440,9 +732,13 @@ func remapIntoInternal(path string, parts []string, base, stem, ext string) stri
 		}
 		return path
 	}
-	// Entrypoints belong under cmd/, not internal/.
+	// Entrypoints belong under cmd/<name>, not internal/, and not a hardcoded server.
 	if len(parts) == 1 && (stem == "main" || strings.EqualFold(base, "main.go")) {
-		return "cmd/server/" + base
+		dir := layout.entry
+		if dir == "" {
+			dir = goCLIEntryRel("")
+		}
+		return dir + "/" + base
 	}
 	if (len(parts) == 1 || (len(parts) == 2 && parts[0] == stem)) && ext == ".go" {
 		pkg := goPackageStem(stem)
@@ -636,13 +932,13 @@ func rewriteBuilderToolPath(wd, taskInput, path string) string {
 			rel = cleaned
 		}
 		if wd == "" {
-			rel = unburyModuleNamedInternalPathAt(".", rel)
+			rel = unburyModuleNamedInternalPathAt(".", rel, taskInput)
 			return
 		}
 		if mapped, rej := directorMapTarget(resolveLayoutCharter(wd), wd, rel); rej == "" && mapped != "" {
 			rel = mapped
 		}
-		rel = unburyModuleNamedInternalPathAt(wd, rel)
+		rel = unburyModuleNamedInternalPathAt(wd, rel, taskInput)
 	}
 	if wd != "" {
 		if old, err := os.Getwd(); err == nil && old != wd {
@@ -678,10 +974,10 @@ func rewriteBuilderToolPath(wd, taskInput, path string) string {
 		rel = remapToDeclaredLayout(rel, layout)
 	}
 
-	// F70: even if a prior write created internal/<mod>/ (so layout.root
-	// flipped to internal), never keep the public module package buried.
-	rel = unburyModuleNamedInternalPathAt(wd, rel)
-	rel = liftPrivateDirPublicAPIAt(wd, rel, "")
+	// A public library must not stay under a private directory. A program
+	// may keep internal/<module>/ as its own helper; see shouldUnburyModuleNamedPackage.
+	rel = unburyModuleNamedInternalPathAt(wd, rel, taskInput)
+	rel = liftPrivateDirPublicAPIAt(wd, rel, "", taskInput)
 
 	out := rel
 	if filepath.IsAbs(path) && wd != "" && !escaped {
@@ -706,7 +1002,7 @@ func rewriteBuilderToolPathWithContent(wd, taskInput, path, content string) stri
 			rel = filepath.ToSlash(r)
 		}
 	}
-	lifted := liftPrivateDirPublicAPIAt(wd, rel, content)
+	lifted := liftPrivateDirPublicAPIAt(wd, rel, content, taskInput)
 	if lifted == "" || lifted == rel {
 		return out
 	}
@@ -800,12 +1096,12 @@ func detectDeclaredLayoutUnder(wd, taskInput string) declaredLayout {
 		// Public-library tasks keep root empty even when genuine private
 		// helpers (internal/heap) exist — those must not bury public API.
 		if wantsPublicLibraryLayout(strings.ToLower(taskInput)) {
-			return declaredLayout{root: "", lang: "go", topMigrations: topMig}
+			return declaredLayout{root: "", lang: "go", topMigrations: topMig, entry: goCLIEntryRel(strings.ToLower(taskInput))}
 		}
 		if goInternalIsServiceTreeAt(wd) {
-			return declaredLayout{root: "internal", lang: "go", topMigrations: topMig}
+			return declaredLayout{root: "internal", lang: "go", topMigrations: topMig, entry: goCLIEntryRel(strings.ToLower(taskInput))}
 		}
-		return declaredLayout{root: "", lang: "go", topMigrations: topMig}
+		return declaredLayout{root: "", lang: "go", topMigrations: topMig, entry: goCLIEntryRel(strings.ToLower(taskInput))}
 	case exists("Cargo.toml"):
 		return declaredLayout{root: "src", lang: "rust", topMigrations: topMig}
 	case exists("package.json"), exists("tsconfig.json"):
@@ -913,12 +1209,23 @@ func publicGoLibraryPresentAt(wd, mod string) bool {
 	return false
 }
 
-// unburyModuleNamedInternalPathAt lifts internal/<mod>/… to <mod>/….
-// Cross-cuts charter ForbidInternalLib so the first tool write cannot persist
-// a public-library burial even before phase1.md exists.
-func unburyModuleNamedInternalPathAt(wd, path string) string {
+// shouldUnburyModuleNamedPackage is true when the task is a public library,
+// not a program. "standard library only" is a dependency constraint and does
+// not count. Same rule for Go internal/, Python/JS _internal/, and src/internal/.
+func shouldUnburyModuleNamedPackage(wd, task string) bool {
+	blob := strings.ToLower(task)
+	if strings.TrimSpace(wd) != "" {
+		blob += "\n" + strings.ToLower(readLayoutTaskBlob(wd))
+		blob += "\n" + strings.ToLower(readWorkflowText(wd, "user_requirement.md"))
+	}
+	return forbidsCLIScaffold(blob) || wantsPublicLibraryLayout(blob)
+}
+
+// unburyModuleNamedInternalPathAt lifts internal/<mod>/… to <mod>/… when the
+// task is a public library. A program's private helper stays put.
+func unburyModuleNamedInternalPathAt(wd, path, task string) string {
 	path = filepath.ToSlash(strings.TrimSpace(path))
-	if path == "" {
+	if path == "" || !shouldUnburyModuleNamedPackage(wd, task) {
 		return path
 	}
 	mod := ""
@@ -976,7 +1283,7 @@ func privateImplRelPath(path string) (rest string, ok bool) {
 // liftPrivateDirPublicAPIAt moves a public-API file out of a private dir.
 // Genuine private helpers (internal/heap with package heap) stay put.
 // Only the misplaced file is lifted — the helper tree is not deleted.
-func liftPrivateDirPublicAPIAt(wd, path, content string) string {
+func liftPrivateDirPublicAPIAt(wd, path, content, task string) string {
 	path = filepath.ToSlash(strings.TrimSpace(path))
 	if path == "" {
 		return path
@@ -993,8 +1300,12 @@ func liftPrivateDirPublicAPIAt(wd, path, content string) string {
 	}
 
 	// Cross-lang: public package identity buried under a private prefix.
+	// A program may keep that package under the private dir (Go internal/<mod>/).
 	if isPublicProjectPackageNameAt(wd, sub) {
-		return publicPackageDestAt(wd, strings.Join(parts[1:], "/"), base)
+		if shouldUnburyModuleNamedPackage(wd, task) {
+			return publicPackageDestAt(wd, strings.Join(parts[1:], "/"), base)
+		}
+		return path
 	}
 
 	if content == "" || !strings.HasSuffix(strings.ToLower(base), ".go") {
@@ -1006,6 +1317,11 @@ func liftPrivateDirPublicAPIAt(wd, path, content string) string {
 		return path
 	}
 	if !isPublicProjectPackageNameAt(wd, pkg) {
+		return path
+	}
+	// package <mod> under internal/<mod>/ is the program's own helper.
+	// The same package under internal/<other>/ is still misplaced.
+	if strings.EqualFold(sub, pkg) && !shouldUnburyModuleNamedPackage(wd, task) {
 		return path
 	}
 	return publicPackageDestAt(wd, base, base)
