@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -137,6 +139,55 @@ func ensureStageFromFile(cmd []string) []string {
 		out = append(out, cmd[i])
 	}
 	return out
+}
+
+// stageGalleryStatusDecision answers "is that stage page still there"
+// locally. It does not start a sketch and does not call the intent LLM.
+func stageGalleryStatusDecision(input string) (naturalLanguageDecision, bool) {
+	lowered := strings.ToLower(strings.TrimSpace(input))
+	if !looksLikeStageGalleryQuestion(lowered) {
+		return naturalLanguageDecision{}, false
+	}
+	if looksLikeVisualSketchSpec(input) {
+		return naturalLanguageDecision{}, false
+	}
+	return naturalLanguageDecision{
+		Kind:       naturalLanguageDecisionAnswer,
+		Reason:     "stage gallery answered locally",
+		Answer:     stageGalleryStatusAnswer(),
+		Confidence: 90,
+	}, true
+}
+
+func looksLikeStageGalleryQuestion(lowered string) bool {
+	if !containsAnyIntentToken(lowered, "舞台页", "stage page", "stage gallery", "stage/index") {
+		return false
+	}
+	return containsAnyIntentToken(lowered,
+		"还在", "在不", "在吗", "有没有", "有关系", "跟这次", "跟这次有",
+		"still there", "still exist", "related", "where is", "is it",
+	)
+}
+
+func stageGalleryStatusAnswer() string {
+	var files []string
+	entries, err := os.ReadDir("stage")
+	if err == nil {
+		for _, ent := range entries {
+			if ent.IsDir() {
+				continue
+			}
+			name := ent.Name()
+			lower := strings.ToLower(name)
+			if strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") {
+				files = append(files, filepath.ToSlash(filepath.Join("stage", name)))
+			}
+		}
+	}
+	if len(files) == 0 {
+		return "No stage gallery files under stage/. A stage page is a visual sketch, separate from the current software task."
+	}
+	return "Stage sketches on disk: " + strings.Join(files, ", ") + ". They are visual sketches, not the current software task."
 }
 
 func isAutoSafeStageCommand(command []string) bool {
