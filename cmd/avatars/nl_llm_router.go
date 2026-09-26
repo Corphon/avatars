@@ -602,6 +602,17 @@ func llmRouterDecisionToNaturalLanguage(decision llmRouterDecision) naturalLangu
 			Confidence: confidence,
 		}
 	default:
+		// Models sometimes put the subcommand in action ("bootstrap") with a
+		// real command array. Treat that as safe_run. Do not invent a command.
+		action := strings.ToLower(strings.TrimSpace(decision.Action))
+		if knownAvatarsCommands[action] && len(decision.Command) > 0 && decision.Command[0] == action {
+			return naturalLanguageDecision{
+				Kind:       naturalLanguageDecisionSafeRun,
+				Reason:     "llm router: " + decision.Reason,
+				Command:    decision.Command,
+				Confidence: confidence,
+			}
+		}
 		return naturalLanguageDecision{
 			Kind:       naturalLanguageDecisionClarify,
 			Reason:     "llm router returned unknown action: " + decision.Action,
