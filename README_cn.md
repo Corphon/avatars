@@ -350,27 +350,6 @@ skills/approved/      # 已批准 skill
 docs/                 # 架构与规划入口
 ```
 
-`claude_code_main/`、`*_for_test/`、`web/stage` 产品面扩张不作为当前生产依赖。不要重写 `internal/runtime`、不要加远程 avatar、不要无 token 公网 serve。
-
-## 测试
-
-功能完善是加法，禁止拆东墙补西墙。已完成功能与隐患记入 SQLite / 导出的 `process_record.md`，避免后续改动把先前能力改坏。
-
-仓库提供可随意破坏的夹具树：
-
-- `sheetforge_for_Test/` — 有内容的测试项目
-- `new_project_for_test/` — 空项目脚手架
-
-新构建的 `avatars.exe` 先复制到夹具的 `avatars/bin/`，再从夹具根运行：
-
-```powershell
-Copy-Item .\bin\avatars.exe .\sheetforge_for_Test\avatars\bin\avatars.exe -Force
-Set-Location .\sheetforge_for_Test
-.\avatars\bin\avatars.exe verify
-```
-
-这些目录可以大胆改、大胆删。不要把它们当成生产依赖。
-
 ## 安全
 
 - API key 只放环境变量；`configs/agent.yaml` 不入库。
