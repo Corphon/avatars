@@ -1387,12 +1387,30 @@ func TryAutoMarkPlanCriteriaWithTests(projectRoot string, taskSummary string, ch
 	if activePhase < 1 {
 		activePhase = 1
 	}
+	dirty := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		checked := strings.HasPrefix(trimmed, "- [x]") || strings.HasPrefix(trimmed, "- [X]")
+		if !strings.HasPrefix(trimmed, "- [ ]") && !checked {
+			continue
+		}
+		lowerDesc := strings.ToLower(trimmed)
+		lowerDesc = strings.TrimPrefix(lowerDesc, "- [ ]")
+		lowerDesc = strings.TrimPrefix(lowerDesc, "- [x]")
+		lowerDesc = strings.TrimSpace(lowerDesc)
+		if criterionNamesMissingOnDiskPath(projectRoot, lowerDesc) {
+			if checked {
+				lines[i] = strings.Replace(line, "- [x]", "- [ ]", 1)
+				if !strings.Contains(lines[i], "- [ ]") {
+					lines[i] = strings.Replace(line, "- [X]", "- [ ]", 1)
+				}
+				dirty = true
+			}
+			continue
+		}
 		if !strings.HasPrefix(trimmed, "- [ ]") {
 			continue
 		}
-		lowerDesc := strings.ToLower(strings.TrimPrefix(trimmed, "- [ ]"))
 		// L2: Success Criteria with "Phase N:" only markable for Active Phase.
 		if n := SuccessCriteriaPhaseNum(lowerDesc); n > 0 && n != activePhase {
 			continue
@@ -1502,7 +1520,7 @@ func TryAutoMarkPlanCriteriaWithTests(projectRoot string, taskSummary string, ch
 		}
 	}
 
-	if marked == 0 {
+	if marked == 0 && !dirty {
 		return SyncPhaseCriteriaMarksToPlan(projectRoot)
 	}
 
@@ -1563,6 +1581,9 @@ func SyncPhaseCriteriaMarksToPlan(projectRoot string) int {
 		}
 		desc := strings.TrimSpace(strings.TrimPrefix(trimmed, "- [ ]"))
 		if criteriaLooksLikeRaceOrSanitizerDesc(strings.ToLower(desc)) {
+			continue
+		}
+		if criterionNamesMissingOnDiskPath(projectRoot, strings.ToLower(desc)) {
 			continue
 		}
 		if !criteriaMatchesCheckedPhaseItem(desc, checked) {
@@ -1835,6 +1856,24 @@ func criteriaLooksLikeHTTPBehaviorDesc(lowerDesc string) bool {
 
 // PlanStructurePathsOK requires every path-like token in the criteria (e.g.
 // app/api/, migrations/) to exist on disk (W4).
+var criterionSlashPathRe = regexp.MustCompile(`(?:[a-z0-9_.-]+/)+[a-z0-9_.-]*`)
+
+// criterionNamesMissingOnDiskPath is true when a criterion names a slash path
+// that is not on disk. Tool globs such as ./... are not files.
+func criterionNamesMissingOnDiskPath(projectRoot, lowerDesc string) bool {
+	for _, p := range criterionSlashPathRe.FindAllString(lowerDesc, -1) {
+		p = strings.Trim(p, "`\"'")
+		p = strings.TrimSuffix(p, "/")
+		if p == "" || p == "." || strings.Contains(p, "...") || strings.ContainsAny(p, "*?") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(projectRoot, filepath.FromSlash(p))); err != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func PlanStructurePathsOK(projectRoot, lowerDesc string) bool {
 	re := regexp.MustCompile(`(?:[a-z0-9_.-]+/)+[a-z0-9_.-]*/?`)
 	paths := re.FindAllString(lowerDesc, -1)
