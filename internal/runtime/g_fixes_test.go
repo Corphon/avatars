@@ -346,3 +346,136 @@ func TestZ9_ProviderBusyAndTransientNetworkNeedles(t *testing.T) {
 		t.Fatal("legacy status 503 needle must still match")
 	}
 }
+
+func TestSanitizeDropsOffLanguageSources(t *testing.T) {
+	task := "golang HTTP bookmark service, standard library only"
+	kept, _, dropped := sanitizeBuilderPathsForTask([]builderCodeFile{
+		{Path: "internal/store/store.go", Content: "package store\n\nfunc Save() error { return nil }\n"},
+		{Path: "bookmarks.js", Content: "const base = process.argv[2]\n"},
+		{Path: "internal/bookmarks/bookmarks.js", Content: "// Placeholder — replace with real implementation.\nexport {};\n"},
+		{Path: "notes.md", Content: "# notes\n"},
+	}, task)
+	paths := map[string]bool{}
+	for _, f := range kept {
+		paths[f.Path] = true
+	}
+	if paths["bookmarks.js"] || paths["internal/bookmarks/bookmarks.js"] {
+		t.Fatalf("js sources must be dropped from a Go project: kept=%v dropped=%v", paths, dropped)
+	}
+	if !paths["internal/store/store.go"] {
+		t.Fatalf("go source must stay: kept=%v", paths)
+	}
+	if !paths["notes.md"] {
+		t.Fatalf("markdown is not a foreign source language: kept=%v", paths)
+	}
+	named := "golang service and also write bookmarks.js"
+	keptNamed, _, _ := sanitizeBuilderPathsForTask([]builderCodeFile{
+		{Path: "bookmarks.js", Content: "const base = 1\n"},
+	}, named)
+	if len(keptNamed) != 1 || !strings.HasSuffix(filepath.ToSlash(keptNamed[0].Path), "bookmarks.js") {
+		t.Fatalf("explicit path must stay, got %+v", keptNamed)
+	}
+}
+
+func TestRejectToolWriteUsesOnDiskPythonAndStoredBrief(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "booking"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "booking", "domain.py"), []byte("class Booking:\n    pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if reason := rejectToolWrite("bookings.js", "add the http module, standard library only"); reason == "" {
+		t.Fatal("javascript must be rejected when the tree is Python")
+	}
+	if reason := rejectToolWrite("booking/http_api.py", "add the http module, standard library only"); reason != "" {
+		t.Fatalf("python write: %s", reason)
+	}
+
+	empty := t.TempDir()
+	reqDir := filepath.Join(empty, "docs", "workflow")
+	if err := os.MkdirAll(reqDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	brief := "用 Python 做个本地服务。只用 Python 标准库。\n"
+	if err := os.WriteFile(filepath.Join(reqDir, "user_requirement.md"), []byte(brief), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(empty); err != nil {
+		t.Fatal(err)
+	}
+	if reason := rejectToolWrite("bookings.js", "接着弄，只用标准库"); reason == "" {
+		t.Fatal("stored brief should keep the project on Python")
+	}
+}
+
+func TestRemoveOffLanguageResidueDeletesRootJS(t *testing.T) {
+	dir := t.TempDir()
+	js := filepath.Join(dir, "bookings.js")
+	if err := os.WriteFile(js, []byte("const x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(dir, "bookings")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "bookings.js"), []byte("const x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removeOffLanguageResidue(dir, []builderCodeFile{{Path: "bookings/bookings.js"}}, nil)
+	if _, err := os.Stat(js); !os.IsNotExist(err) {
+		t.Fatal("root bookings.js should be removed with the rejected write")
+	}
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Fatal("empty directory left by the rejected write should be removed")
+	}
+}
+
+func TestRejectToolWriteOffLanguageAndWorkflowShadow(t *testing.T) {
+	task := "golang HTTP ledger, standard library only"
+	if reason := rejectToolWrite("ledger.js", task); reason == "" {
+		t.Fatal("javascript must be rejected in a Go task")
+	}
+	if reason := rejectToolWrite("storage/file.go", task); reason != "" {
+		t.Fatalf("go source must be writable: %s", reason)
+	}
+	if reason := rejectToolWrite("notes.md", task); reason != "" {
+		t.Fatalf("markdown must stay: %s", reason)
+	}
+	if reason := rejectToolWrite("avatars_todo.md", task); reason == "" {
+		t.Fatal("root workflow checklist must be rejected")
+	}
+	if reason := rejectToolWrite("docs/workflow/avatars_plan.md", task); reason == "" {
+		t.Fatal("workflow plan must not be written by the tool")
+	}
+	if reason := rejectToolWrite("bookmarks.js", "golang service and also write bookmarks.js"); reason != "" {
+		t.Fatalf("a path named in the task must stay: %s", reason)
+	}
+}
+
+func TestRootMainSatisfiedByCmdEntry(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "cmd", "server"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmd", "server", "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !rootEntryAlreadyCovered(dir, "main.go", nil) {
+		t.Fatal("cmd/server/main.go should cover a root main.go")
+	}
+	if rootEntryAlreadyCovered(dir, "internal/store/store.go", nil) {
+		t.Fatal("package file is not a root entry")
+	}
+	if !rootEntryAlreadyCovered(dir, "main.py", map[string]bool{"app/main.py": true}) {
+		t.Fatal("app/main.py should cover a root main.py")
+	}
+}
