@@ -19,9 +19,16 @@ func runRoute(args []string) error {
 		return errors.New("route input cannot be empty")
 	}
 	fmt.Printf("Route input: %s\n", input)
-	route, handled, err := resolveNaturalLanguageQuestion(input, replOptionsFromRun(options), naturalLanguageContextREPL)
+	routeOpts := replOptionsFromRun(options)
+	routeOpts.SkipTalkModel = true
+	route, handled, err := resolveNaturalLanguageQuestion(input, routeOpts, naturalLanguageContextREPL)
 	if err != nil {
 		return err
+	}
+	if handled && deterministicNLReason(route.Summary) {
+		printNaturalLanguageRoute(route)
+		fmt.Println("Route mode: dry-run; no command executed.")
+		return nil
 	}
 	candidates := routeIntent(input)
 	if handled && route.Kind != naturalLanguageRouteSafeRun {
@@ -63,7 +70,10 @@ func printNaturalLanguageRoute(route naturalLanguageRoute) {
 	if len(route.Command) > 0 {
 		fmt.Printf("Command: avatars %s\n", strings.Join(route.Command, " "))
 	}
-	if strings.TrimSpace(route.Answer) != "" {
+	if strings.HasPrefix(route.Summary, "talk aside") && strings.TrimSpace(route.Answer) == "" {
+		fmt.Println("Answer preview:")
+		fmt.Println("Talk runs on execute. Dry-run does not call the model.")
+	} else if strings.TrimSpace(route.Answer) != "" {
 		fmt.Println("Answer preview:")
 		fmt.Println(route.Answer)
 	}
