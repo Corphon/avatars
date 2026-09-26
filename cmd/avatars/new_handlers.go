@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"avatars/internal/tasks"
 	"avatars/internal/tools"
+	_ "modernc.org/sqlite"
 )
 
 // P4-4b: Analysis handlers for tasks that previously fell through to
@@ -583,7 +583,7 @@ func looksLikeOfflineWorkRequest(lowered string) bool {
 	if looksLikeReadOnlyModuleAnalysisRequest(lowered) {
 		return true
 	}
-	if strings.Contains(lowered, "survey depth") || strings.Contains(lowered, "runtime readiness") {
+	if strings.Contains(lowered, "runtime readiness") {
 		return true
 	}
 	analysisSignals := []string{"分析项目", "analyze this", "analyze the project", "找问题", "inspect the", "inspect ", "review the code"}
