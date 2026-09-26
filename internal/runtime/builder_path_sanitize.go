@@ -292,8 +292,8 @@ func redirectRootSourceFile(base string) string {
 	if rootEntrypointBasenames[base] {
 		switch ext {
 		case ".go":
-			if dirExists("cmd/server") || dirExists("cmd") {
-				return "cmd/server/" + base
+			if dest := preferredExistingGoCmdDir(); dest != "" {
+				return dest + "/" + base
 			}
 			return ""
 		case ".py":
