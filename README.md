@@ -362,27 +362,6 @@ skills/approved/      # approved skills
 docs/                 # architecture and planning entry
 ```
 
-`claude_code_main/`, `*_for_test/`, and expanding the `web/stage` product surface are not current production dependencies. Do not rewrite `internal/runtime`, add remote avatars, or publicly serve without a token.
-
-## Testing
-
-Capability work is additive. Do not strip existing guards to pass a single task. Record completed work and hazards in SQLite / exported `process_record.md` so later edits do not silently kill earlier behavior.
-
-The repo ships disposable fixture trees:
-
-- `sheetforge_for_Test/` — a populated test project
-- `new_project_for_test/` — an empty-project scaffold
-
-Copy a newly built `avatars.exe` into the fixture `avatars/bin/` directory, then run from the fixture root:
-
-```powershell
-Copy-Item .\bin\avatars.exe .\sheetforge_for_Test\avatars\bin\avatars.exe -Force
-Set-Location .\sheetforge_for_Test
-.\avatars\bin\avatars.exe verify
-```
-
-These directories may be edited or deleted freely. Do not treat them as production dependencies.
-
 ## Security
 
 - Keep API keys in environment variables. Do not commit `configs/agent.yaml`.
