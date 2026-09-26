@@ -20,9 +20,9 @@ type GenerateFunc func(systemPrompt string, userPrompt string) (string, error)
 // The caller (runtime) provides the LLM call via `generate`.
 func ConstructPlan(projectRoot string, requirement string, generate GenerateFunc) (string, error) {
 	projectName := filepath.Base(projectRoot)
+	// Keep the first brief on disk. A follow-up is appended for this call only.
+	requirement = RequirementForPlan(projectRoot, requirement)
 	sysPrompt, userPrompt := BuildPlanPrompt(requirement, projectName)
-	// C1: persist original NL so phase expansion can align routes/fields/env names.
-	_ = PersistUserRequirement(projectRoot, requirement)
 
 	// W12: Inject lessons learned from process_record.md so the plan
 	// includes mitigations for known pitfalls.
