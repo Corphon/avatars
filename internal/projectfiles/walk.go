@@ -25,6 +25,17 @@ func ShouldSkipWalkDir(name string) bool {
 	return false
 }
 
+// SkipNestedWalkDir reports whether a walk should skip this directory.
+// The walk root is never skipped. filepath.Walk treats SkipDir on the root
+// as "do not visit anything", which empties a scan when the project directory
+// itself is named like a fixture (*_for_test).
+func SkipNestedWalkDir(path, root, name string) bool {
+	if filepath.Clean(path) == filepath.Clean(root) {
+		return false
+	}
+	return ShouldSkipWalkDir(name)
+}
+
 // WalkDirCapped walks root, skipping ShouldSkipWalkDir names and stopping after MaxWalkFiles files.
 func WalkDirCapped(root string, fn fs.WalkDirFunc) error {
 	seen := 0
