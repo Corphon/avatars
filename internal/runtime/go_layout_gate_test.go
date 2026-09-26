@@ -274,3 +274,94 @@ func TestGoInternalIsServiceTree_HelperIsNotService(t *testing.T) {
 		t.Fatal("internal/auto without a root public package must count as a service tree")
 	}
 }
+
+func TestStandardLibraryOnlyDoesNotBuryCLIHelper(t *testing.T) {
+	phase := "# Phase 1\nWorking CLI. Go standard library only (no external dependencies).\nCreate internal/hashfile/hashfile.go and main.go.\n"
+	if forbidsCLIScaffold(phase) {
+		t.Fatal("standard library only must not forbid a CLI")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "workflow"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docs", "workflow", "phase1.md"), []byte(phase), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module hashfile\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "internal", "hashfile"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	impl := "package hashfile\nfunc HashDir(dir string) {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "internal", "hashfile", "hashfile.go"), []byte(impl), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := detectConflictingGoLayout(dir); got != "" {
+		t.Fatalf("CLI helper under internal/<module> must pass, got %q", got)
+	}
+	task := "hash every file in a directory, standard library only"
+	got := rewriteBuilderToolPath(dir, task, "internal/hashfile/hashfile.go")
+	if filepath.ToSlash(got) != "internal/hashfile/hashfile.go" {
+		t.Fatalf("CLI write must stay under internal/hashfile, got %q", got)
+	}
+	gotContent := rewriteBuilderToolPathWithContent(dir, task, "internal/hashfile/hashfile.go", impl)
+	if filepath.ToSlash(gotContent) != "internal/hashfile/hashfile.go" {
+		t.Fatalf("CLI content lift must stay, got %q", gotContent)
+	}
+	brief := criticDirectorLayoutBrief(dir)
+	if strings.Contains(brief, "Do NOT create hashfile/ or internal/hashfile") {
+		t.Fatalf("program charter must not forbid internal/<module>:\n%s", brief)
+	}
+}
+
+func TestProgramKeepsPrivatePackageAcrossLanguages(t *testing.T) {
+	py := t.TempDir()
+	if err := os.WriteFile(filepath.Join(py, "pyproject.toml"), []byte("[project]\nname = \"hashfile\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := rewriteBuilderToolPath(py, "build a small python app that hashes files", "_internal/hashfile/hashfile.py")
+	if filepath.ToSlash(got) != "_internal/hashfile/hashfile.py" {
+		t.Fatalf("python app private package must stay, got %q", got)
+	}
+	rs := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rs, "Cargo.toml"), []byte("[package]\nname = \"hashfile\"\nversion = \"0.1.0\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got = rewriteBuilderToolPath(rs, "build a small rust cli that hashes files", "src/internal/hashfile/lib.rs")
+	if filepath.ToSlash(got) != "src/internal/hashfile/lib.rs" {
+		t.Fatalf("rust app private module must stay, got %q", got)
+	}
+}
+
+func TestPublicLibraryStillRejectsBuriedInternalModule(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "workflow"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	phase := "pure library. no cli. NOT under internal/.\n"
+	if err := os.WriteFile(filepath.Join(dir, "docs", "workflow", "phase1.md"), []byte(phase), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/ratebucket\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "internal", "ratebucket"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "internal", "ratebucket", "ratebucket.go"), []byte("package ratebucket\nfunc Allow() bool { return true }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := detectConflictingGoLayout(dir)
+	if got == "" || !strings.Contains(got, "internal/ratebucket") {
+		t.Fatalf("public library under internal/<module> must still fail, got %q", got)
+	}
+	task := "只要库和测试，不要做成带命令行的小工具"
+	rewritten := rewriteBuilderToolPath(dir, task, "internal/ratebucket/ratebucket.go")
+	if filepath.ToSlash(rewritten) != "ratebucket.go" {
+		t.Fatalf("public library must still unbury, got %q", rewritten)
+	}
+}
