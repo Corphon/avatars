@@ -17,6 +17,11 @@ func PersistUserRequirement(projectRoot, requirement string) error {
 	if requirement == "" {
 		return nil
 	}
+	// A follow-up must not replace the original brief. The first sentence
+	// is what later resumes use to keep the language and the product.
+	if existing := LoadUserRequirement(projectRoot); existing != "" && isFollowUpUtterance(requirement) {
+		return nil
+	}
 	path := filepath.Join(projectRoot, filepath.FromSlash(userRequirementRel))
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -166,6 +171,41 @@ var commonEnglishWord = map[string]bool{
 	"analyze": true, "repository": true, "explain": true, "report": true,
 	"concrete": true, "issues": true, "modify": true, "summarize": true,
 	"coverage": true, "pytest": true,
+}
+
+// isFollowUpUtterance reports a resume that should keep the stored brief.
+// Unlike looksLikeContinuationPrompt, length is not capped: a long
+// "continue this project" sentence is still a follow-up.
+func isFollowUpUtterance(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	if lower == "" {
+		return false
+	}
+	needles := []string{
+		"接着", "继续", "不要重新开", "不要另起", "别另起", "别重新开",
+		"keep going", "don't start a new", "do not start a new",
+		"do not start over", "don't start over", "same project",
+		"resume the", "resume this",
+	}
+	for _, n := range needles {
+		if strings.Contains(lower, n) {
+			return true
+		}
+	}
+	return looksLikeContinuationPrompt(s)
+}
+
+// RequirementForPlan is the text the planner should see. A follow-up keeps
+// the stored original and appends the new sentence, so a later resume cannot
+// drop the language the first sentence named.
+func RequirementForPlan(projectRoot, requirement string) string {
+	requirement = strings.TrimSpace(requirement)
+	stored := LoadUserRequirement(projectRoot)
+	if stored != "" && isFollowUpUtterance(requirement) {
+		return stored + "\n\nFollow-up:\n" + requirement
+	}
+	_ = PersistUserRequirement(projectRoot, requirement)
+	return requirement
 }
 
 func looksLikeContinuationPrompt(s string) bool {
