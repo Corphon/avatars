@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
+	"avatars/internal/projectfiles"
 	"avatars/internal/workflow"
 )
 
@@ -44,7 +46,7 @@ func looksLikeDesignChoiceAsk(lowered string) bool {
 	if containsAnyIntentToken(lowered,
 		"覆盖还是", "还是阻塞", "该覆盖", "该阻塞",
 		"拒绝还是", "还是排队", "还是拒绝", "直接拒绝",
-		"要不要返回", "要不要带",
+		"要不要返回", "要不要带 error", "要不要带返回",
 		"overwrite or", "or block", "or wait", "or queue",
 		"reject or", "fail-fast or", "fail fast or",
 		"should we overwrite", "should it block",
@@ -54,14 +56,57 @@ func looksLikeDesignChoiceAsk(lowered string) bool {
 	}
 	eitherOr := strings.Contains(lowered, "还是") || strings.Contains(lowered, " or ")
 	forbid := looksLikeForbiddenMutationAsk(lowered)
-	if eitherOr && forbid {
+	// A color or product aside ("mint or rust, don't write code") is not an API choice.
+	if eitherOr && forbid && looksLikeSoftwareSemantic(lowered) {
 		return true
 	}
 	return (strings.Contains(lowered, "觉得") || strings.Contains(lowered, "what do you think") ||
 		strings.Contains(lowered, "which should")) &&
-		(strings.Contains(lowered, "覆盖") || strings.Contains(lowered, "阻塞") ||
-			strings.Contains(lowered, "overwrite") || strings.Contains(lowered, "block") ||
-			strings.Contains(lowered, "排队") || strings.Contains(lowered, "拒绝"))
+		looksLikeSoftwareSemantic(lowered)
+}
+
+func looksLikeSoftwareSemantic(lowered string) bool {
+	return containsAnyIntentToken(lowered,
+		"覆盖", "阻塞", "拒绝", "排队", "返回", "签名", "清单", "语义",
+		"error", "api", "overwrite", "block", "queue", "reject",
+		"checklist", "semantic", "signature",
+	)
+}
+
+// looksLikeProjectFollowUpQuestion is an API, checklist, compare, or phase
+// question. A bare "don't write code" plus an unrelated aside is not one.
+func looksLikeProjectFollowUpQuestion(lowered string) bool {
+	return looksLikeDesignChoiceAsk(lowered) ||
+		looksLikeExportedAPIAsk(lowered) ||
+		looksLikeConceptCompareAsk(lowered) ||
+		looksLikeChecklistContradictionAsk(lowered) ||
+		looksLikeDeliveryHonestyAsk(lowered) ||
+		looksLikeOrderSemanticsAsk(lowered) ||
+		looksLikeWorkflowPhaseStatusAsk(lowered) ||
+		looksLikeArchitectureLayoutAsk(lowered)
+}
+
+// looksLikeArchitectureLayoutAsk is a package or layer question that must
+// not start a coding run. It is language-agnostic: store vs HTTP, merge a
+// domain package, keep a separate module.
+func looksLikeArchitectureLayoutAsk(lowered string) bool {
+	hold := looksLikeForbiddenMutationAsk(lowered) || containsAnyIntentToken(lowered,
+		"先说说", "就说", "just explain", "only explain",
+	)
+	if !hold {
+		return false
+	}
+	if containsAnyIntentToken(lowered,
+		"并进", "合并到", "merge into", "fold into", "领域包", "domain package",
+	) {
+		return true
+	}
+	layer := containsAnyIntentToken(lowered,
+		"分层", "架构", "store 包", "store包", "layer", "package", "module",
+	)
+	choice := strings.Contains(lowered, "还是") || strings.Contains(lowered, " or ") ||
+		containsAnyIntentToken(lowered, "要不要", "是不是", "单独", "separate", "直接读")
+	return layer && choice
 }
 
 func looksLikeConceptCompareAsk(lowered string) bool {
@@ -87,18 +132,12 @@ func looksLikeExportedAPIAsk(lowered string) bool {
 	return containsAnyIntentToken(lowered,
 		"返回值", "签名", "满了会怎样", "满了怎样",
 		"先定 api", "先定api", "先定一下", "先定一下 api",
-		"要不要返回", "要不要带", "返回 error", "带 error",
+		"要不要返回", "要不要带 error", "要不要带返回", "返回 error", "带 error",
 		"return value", "returns what", "what does", "signature",
 		"when full", "public api", "exported api",
 		"settle api", "settle the api", "return error", "take an error",
 		"should allow", "should record",
 	)
-}
-
-func looksLikeQuestionOnlyAsk(lowered string) bool {
-	return strings.Contains(lowered, "？") || strings.Contains(lowered, "?") ||
-		strings.Contains(lowered, "要不要") || strings.Contains(lowered, "该不该") ||
-		(strings.Contains(lowered, "怎么") && !looksLikeGreenfieldCreateRequest(lowered))
 }
 
 func looksLikeChecklistContradictionAsk(lowered string) bool {
@@ -171,8 +210,9 @@ func looksLikeNoMutateFollowUp(lowered string) bool {
 		looksLikeChecklistContradictionAsk(lowered) ||
 		looksLikeDeliveryHonestyAsk(lowered) ||
 		looksLikeWorkflowPhaseStatusAsk(lowered) ||
-		looksLikeOrderSemanticsAsk(lowered)
-	if looksLikeForbiddenMutationAsk(lowered) && (specific || looksLikeQuestionOnlyAsk(lowered)) {
+		looksLikeOrderSemanticsAsk(lowered) ||
+		looksLikeArchitectureLayoutAsk(lowered)
+	if looksLikeForbiddenMutationAsk(lowered) && specific {
 		return true
 	}
 	if !specific {
@@ -186,7 +226,8 @@ func answerNoMutateFollowUp(input string) (string, bool) {
 	if !looksLikeNoMutateFollowUp(lowered) && !looksLikeExportedAPIAsk(lowered) &&
 		!looksLikeDesignChoiceAsk(lowered) && !looksLikeConceptCompareAsk(lowered) &&
 		!looksLikeChecklistContradictionAsk(lowered) && !looksLikeDeliveryHonestyAsk(lowered) &&
-		!looksLikeRetractedAside(lowered) && !looksLikeOrderSemanticsAsk(lowered) {
+		!looksLikeRetractedAside(lowered) && !looksLikeOrderSemanticsAsk(lowered) &&
+		!looksLikeArchitectureLayoutAsk(lowered) {
 		return "", false
 	}
 	if mechanicalLocalAnswersYieldToWork(lowered) && !looksLikeForbiddenMutationAsk(lowered) {
@@ -205,8 +246,7 @@ func answerNoMutateFollowUp(input string) (string, bool) {
 			parts = append(parts, summarizeChecklistHonesty("."))
 		}
 	}
-	dumpAPI := (looksLikeExportedAPIAsk(lowered) || looksLikeDesignChoiceAsk(lowered) ||
-		(looksLikeForbiddenMutationAsk(lowered) && looksLikeQuestionOnlyAsk(lowered))) && !honestyAsk
+	dumpAPI := (looksLikeExportedAPIAsk(lowered) || looksLikeDesignChoiceAsk(lowered)) && !honestyAsk
 	if dumpAPI {
 		if api := summarizeWorkspacePublicAPI("."); api != "" {
 			parts = append(parts, api)
@@ -217,6 +257,9 @@ func answerNoMutateFollowUp(input string) (string, bool) {
 	}
 	if looksLikeConceptCompareAsk(lowered) {
 		parts = append(parts, summarizeConceptCompare(lowered))
+	}
+	if looksLikeArchitectureLayoutAsk(lowered) {
+		parts = append(parts, summarizePackageLayout(".", lowered))
 	}
 	if looksLikeDesignChoiceAsk(lowered) || looksLikeOrderSemanticsAsk(lowered) {
 		if sem := summarizeOnDiskCallSemantics(".", lowered); sem != "" {
@@ -244,6 +287,77 @@ func answerNoMutateFollowUp(input string) (string, bool) {
 		return "", false
 	}
 	return out, true
+}
+
+func summarizePackageLayout(root, lowered string) string {
+	dirs := listSourcePackageDirs(root)
+	var b strings.Builder
+	if len(dirs) == 0 {
+		b.WriteString("No source packages are on disk yet. Keep persistence in its own package and HTTP in another.")
+	} else {
+		b.WriteString("Packages on disk: ")
+		b.WriteString(strings.Join(dirs, ", "))
+		b.WriteString(".")
+	}
+	if strings.Contains(lowered, "json") || strings.Contains(lowered, "store") ||
+		strings.Contains(lowered, "分层") || strings.Contains(lowered, "layer") {
+		b.WriteString(" HTTP should call the store package instead of reading the data file itself.")
+	}
+	if strings.Contains(lowered, "并进") || strings.Contains(lowered, "合并") ||
+		strings.Contains(lowered, "merge") || strings.Contains(lowered, "多余") {
+		b.WriteString(" Do not merge the domain package into HTTP unless you ask for that code change.")
+	}
+	b.WriteString(" No files changed.")
+	return b.String()
+}
+
+func listSourcePackageDirs(root string) []string {
+	if strings.TrimSpace(root) == "" {
+		root = "."
+	}
+	seen := map[string]bool{}
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.IsDir() {
+			if projectfiles.SkipNestedWalkDir(path, root, info.Name()) {
+				return filepath.SkipDir
+			}
+			base := strings.ToLower(info.Name())
+			if path != root && (base == "docs" || base == "testdata" || base == "stage") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(info.Name())) {
+		case ".go", ".py", ".rs", ".js", ".jsx", ".ts", ".tsx", ".java", ".cs":
+		default:
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, filepath.Dir(path))
+		if relErr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			rel = "root"
+		}
+		if strings.HasPrefix(rel, "docs/") || rel == "docs" {
+			return nil
+		}
+		seen[rel] = true
+		if len(seen) >= 12 {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	out := make([]string, 0, len(seen))
+	for dir := range seen {
+		out = append(out, dir)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func looksLikeOrderSemanticsAsk(lowered string) bool {
@@ -436,30 +550,10 @@ func workspaceSourceBlob(root string) string {
 }
 
 func summarizeConceptCompare(lowered string) string {
-	low := strings.ToLower(lowered)
-	if strings.Contains(low, "afterfunc") || strings.Contains(low, "after func") ||
-		strings.Contains(low, "settimeout") || strings.Contains(low, "time.after") {
-		return "A one-shot timer (time.AfterFunc, setTimeout, and similar) fires once. A debounce wrapper resets that timer on each call so only the last scheduled function runs after a quiet period. If sources have no HTTP/CLI surface, do not add one unless you ask for it."
+	if strings.TrimSpace(lowered) == "" {
+		return ""
 	}
-	if strings.Contains(low, "lodash") || strings.Contains(low, "underscore") {
-		return "Same last-call-wins idea as lodash.debounce / underscore.debounce: later calls replace the pending one. This delivery is a small in-process library, not a port of that framework and not an HTTP service."
-	}
-	if strings.Contains(low, "errgroup") || strings.Contains(low, "waitgroup") ||
-		strings.Contains(low, "wait group") || strings.Contains(low, "asyncio.gather") ||
-		strings.Contains(low, "promise.all") || strings.Contains(low, "joinall") ||
-		strings.Contains(low, "countdownlatch") {
-		return "A wait-group / errgroup / gather / Promise.all waits for a set of independent tasks. An in-process coalesce (singleflight-style) merges concurrent callers of the same key into one execution. They solve different problems. If sources have no HTTP/CLI surface, do not add one unless you ask for it."
-	}
-	if strings.Contains(low, "container/heap") || strings.Contains(low, "heapq") ||
-		strings.Contains(low, "priorityqueue") || strings.Contains(low, "priority queue") ||
-		strings.Contains(low, "binaryheap") || strings.Contains(low, "binary heap") {
-		return "A language heap primitive (container/heap, heapq, PriorityQueue) is the unordered-heap interface. An in-process priority-queue library wraps it with typed Push/Pop, empty-pop behavior, and equal-priority FIFO when the sources say so. Compare to the exported API on disk, not to the primitive alone."
-	}
-	if strings.Contains(low, "channel") || strings.Contains(low, "queue") ||
-		strings.Contains(low, "socket") {
-		return "This delivery is an in-process library/package/crate/module: callers invoke exported functions in the same process. A language channel, queue, or socket is a different primitive (concurrency or I/O). If sources have no HTTP/CLI surface, do not add one unless you ask for it."
-	}
-	return "This delivery is a small in-process library/package/crate/module. Compare it to the exported API on disk, not to another framework. If sources have no HTTP/CLI surface, do not add one unless you ask for it."
+	return "This delivery is a small in-process library/package/crate/module. Compare it to the exported API on disk, not to a memorized description of another framework. If sources have no HTTP/CLI surface, do not add one unless you ask for it."
 }
 
 var (
