@@ -97,8 +97,8 @@ func TestF90_ReconcileFlagsToolchainAndFixedLies(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "F90") {
-		t.Fatalf("expected F90 correction notes:\n%s", text)
+	if strings.Contains(text, "F90") || strings.Contains(text, "F93") {
+		t.Fatalf("ticket ids must not appear in the answer:\n%s", text)
 	}
 	if !strings.Contains(text, "no toolchain") && !strings.Contains(text, "language toolchain") {
 		t.Fatalf("expected no-toolchain lie correction:\n%s", text)
@@ -169,7 +169,7 @@ func New(name string, cfg Config) (*Breaker, error) {
 		t.Fatal(err)
 	}
 	text := string(answer)
-	if !strings.Contains(text, "## Correct API") || !strings.Contains(text, "F93") {
+	if !strings.Contains(text, "## Correct API") || !strings.Contains(text, "do not match on-disk exported signatures") {
 		t.Fatalf("expected Correct API section:\n%s", text)
 	}
 }
@@ -308,5 +308,141 @@ func TestReconcileResolvesWorkflowBasename(t *testing.T) {
 	}
 	if !claimedPathExistsOnDisk(dir, "avatars_todo.md") {
 		t.Fatal("expected docs/workflow/avatars_todo.md to satisfy the basename")
+	}
+}
+
+func TestDeliveryStatusStaysOpenWhilePlanIsInProgress(t *testing.T) {
+	dir := t.TempDir()
+	wf := filepath.Join(dir, "docs", "workflow")
+	if err := os.MkdirAll(wf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := "> **Status**: in-progress\n> **Active Phase**: 1\n> **Phase Count**: 2\n"
+	if err := os.WriteFile(filepath.Join(wf, "avatars_plan.md"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	todo := "## Phase 1 Checklist (active)\n- [ ] skeleton\n- [ ] core\n- [x] tests\n"
+	if err := os.WriteFile(filepath.Join(wf, "avatars_todo.md"), []byte(todo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileFinalDeliveryAnswer(dir, "completed", "shipped", true, true, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(filepath.Join(dir, "answer.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(text)
+	if strings.Contains(body, "**completed**") {
+		t.Fatalf("open plan must not be presented as completed:\n%s", body)
+	}
+	if !strings.Contains(body, "**in_progress**") {
+		t.Fatalf("want in_progress status:\n%s", body)
+	}
+}
+
+func TestAlignDeliveryAnswerWhenPlanCompleted(t *testing.T) {
+	dir := t.TempDir()
+	wf := filepath.Join(dir, "docs", "workflow")
+	if err := os.MkdirAll(wf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := "> **Status**: completed\n> **Active Phase**: 2\n> **Phase Count**: 2\n"
+	if err := os.WriteFile(filepath.Join(wf, "avatars_plan.md"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	todo := "## Phase 2 Checklist (active)\n- [x] api\n- [x] tests\n"
+	if err := os.WriteFile(filepath.Join(wf, "avatars_todo.md"), []byte(todo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	answer := "# Delivery Summary\n\n## Status\n\n- **in_progress** — build_ok=true\n\n## What Changed\n\n- `api/server.go`\n"
+	if err := os.WriteFile(filepath.Join(dir, "answer.md"), []byte(answer), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	alignDeliveryAnswerWithPlan(dir)
+	body, err := os.ReadFile(filepath.Join(dir, "answer.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "**completed**") {
+		t.Fatalf("finished plan should not stay in_progress:\n%s", body)
+	}
+	if strings.Contains(string(body), "**in_progress**") {
+		t.Fatalf("status line still in_progress:\n%s", body)
+	}
+}
+
+func TestAlignDeliveryRefreshesProgressWhilePlanOpen(t *testing.T) {
+	dir := t.TempDir()
+	wf := filepath.Join(dir, "docs", "workflow")
+	if err := os.MkdirAll(wf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := "> **Status**: in-progress\n> **Active Phase**: 2\n> **Phase Count**: 2\n"
+	if err := os.WriteFile(filepath.Join(wf, "avatars_plan.md"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	todo := "## Phase 2 Checklist (active)\n- [x] http\n- [ ] cli\n"
+	if err := os.WriteFile(filepath.Join(wf, "avatars_todo.md"), []byte(todo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	answer := "# Delivery Summary\n\n## Status\n\n- **in_progress** — build_ok=true\n\n## Progress\n\n- Active phase: 1 of 2\n- Checklist: 0/3 done\n"
+	if err := os.WriteFile(filepath.Join(dir, "answer.md"), []byte(answer), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	alignDeliveryAnswerWithPlan(dir)
+	body, err := os.ReadFile(filepath.Join(dir, "answer.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "Active phase: 2 of 2") || !strings.Contains(text, "Checklist: 1/2 done") {
+		t.Fatalf("progress not refreshed:\n%s", text)
+	}
+	if !strings.Contains(text, "**in_progress**") {
+		t.Fatalf("open plan must stay in progress:\n%s", text)
+	}
+}
+
+func TestVerifyHintAndBarePythonPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "booking"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "booking", "cli.py"), []byte("def main():\n    pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if hint := projectVerifyHint(dir); hint != "python -m unittest discover" {
+		t.Fatalf("verify hint = %q", hint)
+	}
+	if !claimedPathExistsOnDisk(dir, "cli.py") {
+		t.Fatal("bare cli.py should match booking/cli.py")
+	}
+	if claimedPathExistsOnDisk(dir, "missing.py") {
+		t.Fatal("missing.py is not on disk")
+	}
+}
+
+func TestWhatChangedListsOnlyThisRun(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kept.go"), []byte("package kept\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "old.go"), []byte("package old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileFinalDeliveryAnswer(dir, "completed", "done", true, true, "", []string{"kept.go"}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "answer.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "`kept.go`") {
+		t.Fatalf("this run's file missing:\n%s", text)
+	}
+	if strings.Contains(text, "old.go") {
+		t.Fatalf("files not written this run must not be listed:\n%s", text)
 	}
 }
