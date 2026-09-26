@@ -325,6 +325,19 @@ func TestREPLHistoryReplayCommands(t *testing.T) {
 	}
 }
 
+func TestFormatREPLContextOmitsTalk(t *testing.T) {
+	clearREPLTalkLines()
+	t.Cleanup(clearREPLTalkLines)
+	noteREPLTalkLine("tell me a joke")
+	ctx := formatREPLContext([]string{"build a checksum cli", "tell me a joke", "continue"})
+	if !strings.Contains(ctx, "build a checksum cli") || !strings.Contains(ctx, "continue") {
+		t.Fatalf("work turns missing: %q", ctx)
+	}
+	if strings.Contains(ctx, "joke") {
+		t.Fatalf("talk leaked into run context: %q", ctx)
+	}
+}
+
 func TestFormatREPLContext_RecentTurnsOnly(t *testing.T) {
 	// replContextMaxTurns=10, so 7-turn history should include all turns.
 	history := []string{"turn1", "turn2", "turn3", "turn4", "turn5", "turn6", "turn7"}
