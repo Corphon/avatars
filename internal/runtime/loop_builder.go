@@ -1931,6 +1931,9 @@ func (e *Engine) generateBuilderCodeSingle(ctx context.Context, work workflowNod
 				}, nil)
 		}
 		files = kept
+		if wd, wdErr := os.Getwd(); wdErr == nil {
+			removeOffLanguageResidue(wd, rejected, kept)
+		}
 	}
 
 	// File whitelist: ONLY allow files mentioned in the original task OR files
@@ -2049,8 +2052,15 @@ func (e *Engine) generateBuilderCodeSingle(ctx context.Context, work workflowNod
 			generatedSet[filepath.ToSlash(filepath.Clean(f.Path))] = true
 		}
 		var missing []string
+		layout := detectDeclaredLayout(work.input)
 		for _, mp := range mandatoryPaths {
 			normalized := filepath.ToSlash(filepath.Clean(mp))
+			if offLanguageSourceReason(normalized, strings.ToLower(work.input), layout.lang) != "" {
+				continue
+			}
+			if rootEntryAlreadyCovered(".", normalized, generatedSet) {
+				continue
+			}
 			if !generatedSet[normalized] {
 				// Check if file already exists on disk (from previous run).
 				if _, statErr := os.Stat(mp); statErr != nil {
@@ -2068,7 +2078,13 @@ func (e *Engine) generateBuilderCodeSingle(ctx context.Context, work workflowNod
 			gapPrompt := fmt.Sprintf("MUST generate these files that were missing from the previous output:\n%s\n\nOriginal task:\n%s",
 				strings.Join(missing, "\n"), work.input)
 			if gapFiles, gapErr := e.generateBuilderCodeSingle(ctx, work, gapPrompt); gapErr == nil {
-				files = append(files, gapFiles...)
+				lowerTask := strings.ToLower(work.input)
+				for _, gf := range gapFiles {
+					if offLanguageSourceReason(gf.Path, lowerTask, layout.lang) != "" {
+						continue
+					}
+					files = append(files, gf)
+				}
 			} else {
 				// Last resort: create minimal stubs so verification loop can fill them.
 				// N1-2 / T3: never stub dependency names, junk scaffold paths, or non-sources.
@@ -3225,7 +3241,7 @@ func detectTargetLanguage(taskInput string) string {
 		{"python", []string{"python", "python3", "pyenv", "pip install", "pytest", "python script", "python project"}, false},
 		{"typescript", []string{"typescript", "type script"}, false},
 		{"javascript", []string{"javascript", "java script", "node.js", "nodejs", "npm install", "npx "}, false},
-		{"go", []string{"golang", "go语言", "go http", "go server", "go api", "go cli", "go library", "go package", "go module", "go program", "go.mod"}, false},
+		{"go", []string{"golang", "go语言", "用 go", "用go", "go http", "go server", "go api", "go cli", "go library", "go package", "go module", "go program", "go.mod"}, false},
 		{"java", []string{"spring boot", "spring framework"}, false},
 		{"c++", []string{"c++", "cpp", "c++17", "c++20"}, false},
 		{"c", []string{"c language", "c programming", "c program"}, false},
@@ -3282,6 +3298,56 @@ func detectTargetLanguage(taskInput string) string {
 	return ""
 }
 
+// alwaysOnSkillApplies keeps a language-scoped always-on skill out of other
+// languages. Unknown project language still loads it, so a Go repo without
+// a named language in the sentence does not lose the skill. The system
+// prefix for a Python run stays free of that body.
+func alwaysOnSkillApplies(name, task string) bool {
+	prefix := skillLanguagePrefix(name)
+	if prefix == "" {
+		return true
+	}
+	lang := detectTargetLanguage(task)
+	if lang == "" {
+		lang = detectLanguageFromDisk()
+	}
+	if lang == "" {
+		lang = languageFromSources(".")
+	}
+	if lang == "" {
+		if wd, err := os.Getwd(); err == nil {
+			lang = detectTargetLanguage(workflow.LoadUserRequirement(wd))
+		}
+	}
+	if lang == "" {
+		return true
+	}
+	return sameLanguageFamily(prefix, lang)
+}
+
+func skillLanguagePrefix(name string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, p := range []string{"javascript", "typescript", "python", "golang", "csharp", "nodejs", "rust", "java", "go"} {
+		if strings.HasPrefix(lower, p+"-") || strings.HasPrefix(lower, p+"_") {
+			return p
+		}
+	}
+	return ""
+}
+
+func sameLanguageFamily(prefix, lang string) bool {
+	switch prefix {
+	case "golang", "go":
+		return lang == "go"
+	case "nodejs", "javascript":
+		return lang == "javascript" || lang == "typescript"
+	case "typescript":
+		return lang == "typescript" || lang == "javascript"
+	default:
+		return prefix == lang
+	}
+}
+
 // getLanguageExtensions returns the expected file extensions for a given language.
 // Also includes universal files (.md, .txt, .yaml, .json, etc.).
 func getLanguageExtensions(lang string) []string {
@@ -3310,8 +3376,43 @@ func getLanguageExtensions(lang string) []string {
 	}
 }
 
-// filterCrossLanguageFiles separates files matching the target language from those that don't.
-// Returns (kept, rejected). When targetLang is "", all files are kept.
+// removeOffLanguageResidue deletes a rejected source file that an earlier
+// tool write already landed, including the root basename when the path was
+// remapped into a subdirectory. Kept files are left alone.
+func removeOffLanguageResidue(wd string, rejected, kept []builderCodeFile) {
+	keptSet := map[string]bool{}
+	for _, f := range kept {
+		keptSet[filepath.ToSlash(filepath.Clean(f.Path))] = true
+	}
+	for _, r := range rejected {
+		rel := filepath.ToSlash(filepath.Clean(r.Path))
+		if rel == "" || rel == "." || strings.Contains(rel, "..") || keptSet[rel] {
+			continue
+		}
+		if sourceLangOfPath(rel) == "" {
+			continue
+		}
+		abs := filepath.Join(wd, filepath.FromSlash(rel))
+		_ = os.Remove(abs)
+		removeDirIfEmpty(filepath.Dir(abs))
+		base := filepath.Base(rel)
+		if base != rel && !keptSet[base] && sourceLangOfPath(base) != "" {
+			_ = os.Remove(filepath.Join(wd, base))
+		}
+	}
+}
+
+func removeDirIfEmpty(dir string) {
+	if dir == "" || dir == "." {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) > 0 {
+		return
+	}
+	_ = os.Remove(dir)
+}
+
 func filterCrossLanguageFiles(files []builderCodeFile, targetLang string) (kept, rejected []builderCodeFile) {
 	if targetLang == "" {
 		return files, nil
