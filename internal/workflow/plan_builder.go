@@ -373,6 +373,28 @@ func UpdatePlanStatus(projectRoot string, status string) error {
 	return nil
 }
 
+// MarkDraftInProgress moves a filled plan from draft to in-progress once
+// implementation has continued. A failed confirm must not call this: the
+// header stays draft until a later run actually writes sources or advances
+// past phase 1. Language-agnostic: it only reads the plan header.
+func MarkDraftInProgress(projectRoot string, wroteSources bool) error {
+	content, err := ReadWorkflowDoc(projectRoot, "plan")
+	if err != nil {
+		return err
+	}
+	meta := ParsePlanMeta(content)
+	if !strings.EqualFold(strings.TrimSpace(meta.Status), "draft") {
+		return nil
+	}
+	if IsPlanEmpty(projectRoot) {
+		return nil
+	}
+	if !wroteSources && meta.ActivePhase <= 1 {
+		return nil
+	}
+	return UpdatePlanStatus(projectRoot, "in-progress")
+}
+
 // UpdatePlanPhaseDocsStatus sets the durable process tag for phase-doc completeness.
 // value examples: "complete", "incomplete (5)", "incomplete (2,5)"
 func UpdatePlanPhaseDocsStatus(projectRoot string, value string) error {
