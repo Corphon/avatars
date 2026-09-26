@@ -1,6 +1,7 @@
 package arch
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -170,6 +171,20 @@ func TestIsPythonStdlibAndFilterExtDepNoise(t *testing.T) {
 	}
 	if !got["github.com/foo/bar"] || !got["flask"] {
 		t.Fatalf("expected github+flask, got %+v", out)
+	}
+}
+
+func TestAnalyzeDataFlow_RootNamedForTest(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "service_for_test")
+	writeTree(t, root, map[string]string{
+		"go.mod":                 "module example.com/demo\n",
+		"main.go":                "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"ok\") }\n",
+		"other_for_test/skip.go": "package skip\n",
+	})
+	report := AnalyzeDataFlow(root)
+	if report == nil {
+		t.Fatal("a project root named *_for_test must still produce a dataflow report")
 	}
 }
 
