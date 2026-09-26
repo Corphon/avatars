@@ -144,7 +144,7 @@ func TestNoMutateFollowUpsDoNotLaunchWork(t *testing.T) {
 		},
 		{
 			in:   "和 time.AfterFunc / lodash.debounce 比有啥区别？别开任务，别改代码，直接说。",
-			want: []string{"AfterFunc"},
+			want: []string{"in-process"},
 			ban:  []string{"Repair note:", "acceptEdits", "--new-task"},
 		},
 		{
@@ -194,6 +194,9 @@ func TestNoMutateFollowUpsDoNotLaunchWork(t *testing.T) {
 				t.Fatalf("banned %q in answer for %q:\n%s", b, tc.in, d.Answer)
 			}
 		}
+		if !deterministicNLReason(d.Reason) {
+			t.Fatalf("reason %q should skip the router for %q", d.Reason, tc.in)
+		}
 	}
 }
 
@@ -229,10 +232,10 @@ func TestDiskSemanticsCoalesceAndWaitGroup(t *testing.T) {
 	if d2.Kind != naturalLanguageDecisionAnswer {
 		t.Fatalf("kind=%s reason=%q", d2.Kind, d2.Reason)
 	}
-	if !strings.Contains(d2.Answer, "wait-group") || !strings.Contains(d2.Answer, "same key") {
-		t.Fatalf("want wait-group vs coalesce, got:\n%s", d2.Answer)
+	if !strings.Contains(d2.Answer, "in-process") {
+		t.Fatalf("want in-process compare, got:\n%s", d2.Answer)
 	}
-	if strings.Contains(d2.Answer, "Repair note:") || strings.Contains(d2.Answer, "--new-task") {
+	if strings.Contains(d2.Answer, "wait-group") || strings.Contains(d2.Answer, "Repair note:") || strings.Contains(d2.Answer, "--new-task") {
 		t.Fatalf("must not launch work:\n%s", d2.Answer)
 	}
 }
@@ -275,8 +278,8 @@ func TestDiskSemanticsFIFOAndHeapOrder(t *testing.T) {
 	if d3.Kind != naturalLanguageDecisionAnswer {
 		t.Fatalf("kind=%s", d3.Kind)
 	}
-	if !strings.Contains(d3.Answer, "heap primitive") && !strings.Contains(d3.Answer, "wraps") {
-		t.Fatalf("want heap wrapper vs primitive, got:\n%s", d3.Answer)
+	if !strings.Contains(d3.Answer, "in-process") && !strings.Contains(d3.Answer, "exported API") {
+		t.Fatalf("want on-disk comparison, got:\n%s", d3.Answer)
 	}
 }
 
