@@ -173,6 +173,7 @@ func ExpandActivePhaseDetail(projectRoot string, generate GenerateFunc) (expande
 	}
 	_ = markPhaseDetailFull(projectRoot, phaseNum)
 	_ = SyncTodoForPhase(projectRoot, phaseNum)
+	_, _ = SyncPhaseDocsProcessTag(projectRoot)
 	return true, phaseNum, nil
 }
 
