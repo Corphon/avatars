@@ -514,6 +514,9 @@ func classifyNaturalLanguageQuestionWithOptions(input string, options replComman
 			Confidence: 95,
 		}
 	}
+	if nd, ok := stageGalleryStatusDecision(input); ok {
+		return nd
+	}
 	if answer, ok := answerNoMutateFollowUp(input); ok {
 		return naturalLanguageDecision{
 			Kind:       naturalLanguageDecisionAnswer,
@@ -551,6 +554,19 @@ func classifyNaturalLanguageQuestionWithOptions(input string, options replComman
 	if nd, ok := stageSketchSafeRunDecision(input); ok {
 		return nd
 	}
+	if nd, ok := creationDeliveryDecision(input); ok {
+		return nd
+	}
+	if nd, ok := stackSwitchDecision(input); ok {
+		return nd
+	}
+	if nd, ok := storageSwitchDecision(input); ok {
+		return nd
+	}
+	// Side chat after every work gate. One short reply, never the intent router.
+	if nd, ok := talkAsideDecision(input, allowLLM && !options.SkipTalkModel); ok {
+		return nd
+	}
 
 	// NL5: LLM-first routing — the primary decision path for work requests.
 	// Give the LLM the full CLI_guide.md + cli_actions.yaml catalog.
@@ -560,6 +576,7 @@ func classifyNaturalLanguageQuestionWithOptions(input string, options replComman
 			if nd.Kind == naturalLanguageDecisionSafeRun {
 				nd.Command = rewriteBootstrapAwayFromLibrary(input, nd.Command)
 				nd.Command = rewriteCommandTowardStageSketch(input, nd.Command)
+				nd.Command = rewriteScriptAwayFromProjectWorkflow(input, nd.Command)
 			}
 			// Checklist-align / resume work must not stay a chat answer.
 			if (nd.Kind == naturalLanguageDecisionAnswer || nd.Kind == naturalLanguageDecisionMemory) &&
@@ -2874,6 +2891,14 @@ func continuationWorkSafeRunDecision(input, lowered string) (naturalLanguageDeci
 	trimmed := strings.TrimSpace(input)
 	file, _ := splitTrailingGuidanceFile(trimmed)
 	if transcript := latestResumableTranscriptPath("."); transcript != "" {
+		if projectDeliveryAlreadyComplete() && !looksLikeChecklistProgressReconcile(lowered) {
+			return naturalLanguageDecision{
+				Kind:       naturalLanguageDecisionAnswer,
+				Reason:     "already delivered; continue does not open another run",
+				Answer:     alreadyDeliveredAnswer(),
+				Confidence: 92,
+			}, true
+		}
 		cmd := []string{"run", "--resume", transcript}
 		if id := taskIDFromTranscriptPath(transcript); id != "" {
 			cmd = append(cmd, "--task", id)
@@ -2886,25 +2911,62 @@ func continuationWorkSafeRunDecision(input, lowered string) (naturalLanguageDeci
 		}
 		return naturalLanguageDecision{
 			Kind:       naturalLanguageDecisionSafeRun,
-			Reason:     "checklist-align or resume continuation is a run, not a status recap",
+			Reason:     "resume continuation uses the existing task",
 			Command:    cmd,
 			Confidence: 93,
 		}, true
 	}
-	if file != "" {
+	if looksLikeChecklistProgressReconcile(lowered) || file != "" {
+		cmd := []string{"run", "--new-task", "--permission-mode", mode}
+		if file != "" {
+			cmd = append(cmd, "--from-file", file)
+		} else {
+			cmd = append(cmd, trimmed)
+		}
 		return naturalLanguageDecision{
 			Kind:       naturalLanguageDecisionSafeRun,
-			Reason:     "checklist-align or resume continuation is a run, not a status recap",
-			Command:    []string{"run", "--new-task", "--permission-mode", mode, "--from-file", file},
+			Reason:     "resume continuation has no transcript; checklist align still runs",
+			Command:    cmd,
 			Confidence: 90,
 		}, true
 	}
+	question := "There is no task to continue yet. Say what you want built, or start a project first."
+	if workspaceHasSoftwareProject() {
+		question = "Source files are already on disk, but there is no task transcript to resume. Say what to change next. A bare continue does not start a new task."
+	}
 	return naturalLanguageDecision{
-		Kind:       naturalLanguageDecisionSafeRun,
-		Reason:     "checklist-align or resume continuation is a run, not a status recap",
-		Command:    []string{"run", "--new-task", "--permission-mode", mode, trimmed},
+		Kind:       naturalLanguageDecisionClarify,
+		Reason:     "nothing to resume; no task transcript yet",
+		Question:   question,
 		Confidence: 90,
 	}, true
+}
+
+// projectDeliveryAlreadyComplete is true when the plan is marked completed
+// and the active checklist has no open items. Language-agnostic: it reads
+// the workflow docs, not a Go layout.
+func projectDeliveryAlreadyComplete() bool {
+	data, err := os.ReadFile(filepath.Join("docs", "workflow", "avatars_plan.md"))
+	if err != nil {
+		return false
+	}
+	meta := workflow.ParsePlanMeta(string(data))
+	if !strings.EqualFold(strings.TrimSpace(meta.Status), "completed") {
+		return false
+	}
+	done, total := workflow.CountTodoProgress(".")
+	return total > 0 && done == total
+}
+
+func alreadyDeliveredAnswer() string {
+	data, err := os.ReadFile(filepath.Join("docs", "workflow", "avatars_plan.md"))
+	project := "the current project"
+	if err == nil {
+		if name := strings.TrimSpace(workflow.ParsePlanMeta(string(data)).Project); name != "" {
+			project = name
+		}
+	}
+	return "Already delivered: " + project + ". The checklist is complete, so this does not start another run. Ask for a specific change if you want more work."
 }
 
 func rewriteRunCommandToResume(cmd []string, transcript, fallbackUser string) []string {
@@ -5332,6 +5394,9 @@ func latestRunAnswerContent(root string) (string, tasks.Workspace, bool, error) 
 	if err != nil || !ok {
 		return "", tasks.Workspace{}, false, err
 	}
+	if reconciled := reconciledDeliveryAnswer(root); reconciled != "" {
+		return reconciled, workspace, true, nil
+	}
 	transcriptPath := strings.TrimSpace(workspace.LatestTranscriptPath())
 	if transcriptPath == "" {
 		return "", workspace, false, nil
@@ -5349,6 +5414,20 @@ func latestRunAnswerContent(root string) (string, tasks.Workspace, bool, error) 
 		return answer, workspace, true, nil
 	}
 	return "", workspace, false, nil
+}
+
+// reconciledDeliveryAnswer is the on-disk summary after path and gate checks.
+// The chat preview uses it so a model "What Changed" list is not shown as fact.
+func reconciledDeliveryAnswer(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, "answer.md"))
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(string(data))
+	if !strings.Contains(text, "final-delivery path") {
+		return ""
+	}
+	return text
 }
 
 func persistLatestAnswerArtifact(root string, workspace tasks.Workspace, answer string) (string, error) {
