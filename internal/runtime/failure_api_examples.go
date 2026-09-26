@@ -34,6 +34,9 @@ func detectMismatchedUsageExamples(wd, synthText string) []string {
 	for _, line := range detectMismatchedGoUsage(wd, synthText) {
 		add(line)
 	}
+	for _, line := range detectClaimedGoAnyResult(wd, synthText) {
+		add(line)
+	}
 	for _, line := range detectMismatchedDefUsage(wd, synthText, ".py", pythonDefRe) {
 		add(line)
 	}
@@ -146,6 +149,47 @@ func listExportedGoFuncs(wd string) []exportedGoFunc {
 		return nil
 	})
 	return exports
+}
+
+func detectClaimedGoAnyResult(wd, synth string) []string {
+	if !strings.Contains(synth, "[]any") && !strings.Contains(synth, "[]interface{}") {
+		return nil
+	}
+	var out []string
+	for _, exp := range listExportedGoFuncs(wd) {
+		if strings.Contains(exp.Sig, "[]any") || strings.Contains(exp.Sig, "interface{}") {
+			continue
+		}
+		if !claimedResultNearName(synth, exp.Name) {
+			continue
+		}
+		out = append(out, exp.File+": "+exp.Sig+" (model said []any)")
+	}
+	return out
+}
+
+func claimedResultNearName(text, name string) bool {
+	if name == "" {
+		return false
+	}
+	idx := 0
+	for idx < len(text) {
+		i := strings.Index(text[idx:], name)
+		if i < 0 {
+			return false
+		}
+		i += idx
+		end := i + len(name) + 80
+		if end > len(text) {
+			end = len(text)
+		}
+		window := text[i:end]
+		if strings.Contains(window, "[]any") || strings.Contains(window, "[]interface{}") {
+			return true
+		}
+		idx = i + len(name)
+	}
+	return false
 }
 
 func detectMismatchedGoUsage(wd, synth string) []string {
@@ -428,9 +472,11 @@ func compositeCall(synth, name string) bool {
 	return strings.HasPrefix(trimmed, "{") || compositeArgRe.MatchString(trimmed)
 }
 
-var claimedExportedCallRe = regexp.MustCompile(`(?:\b|\.|/)([A-Z][A-Za-z0-9]{2,})(?:\s*\(|\s*/)`)
+// A call is Name( or pkg.Name(. A following slash is a path (CLI/, Risks/Notes),
+// not an exported function.
+var claimedExportedCallRe = regexp.MustCompile(`(?:\b|\.|/)([A-Z][A-Za-z0-9]{2,})\s*\(`)
 var claimedSlashIdentRe = regexp.MustCompile(`/([A-Z][A-Za-z0-9]{2,})\b`)
-var claimedDotIdentRe = regexp.MustCompile(`\.([A-Z][A-Za-z0-9]{2,})\b`)
+var claimedDotIdentRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\.([A-Z][A-Za-z0-9]{2,})\b`)
 
 var unevidencedAPISkip = map[string]bool{
 	"New": true, "Get": true, "Set": true, "Len": true, "Cap": true, "Err": true,
@@ -442,11 +488,38 @@ var unevidencedAPISkip = map[string]bool{
 	"Read": true, "Write": true, "Open": true, "Wait": true, "Lock": true,
 	"Unlock": true, "Size": true, "Name": true, "Time": true, "Duration": true,
 	"Queue": true, "Item": true, "Clock": true, "Worker": true,
+	// HTTP methods name routes (POST /items), not exported functions.
+	"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true,
+	"HEAD": true, "OPTIONS": true, "TRACE": true, "CONNECT": true,
+	// Markdown section titles, not exported symbols.
+	"Risks": true, "Notes": true, "Overview": true, "Goals": true,
+	"Tasks": true, "Scope": true, "Status": true, "Summary": true,
+	"Verification": true, "Blockers": true, "Progress": true, "Checklist": true,
+}
+
+// slashIdentIsFilesystemPath reports /Name that is a directory segment
+// (D:/SKF/dev, docs/Notes) rather than a symbol claim.
+func slashIdentIsFilesystemPath(text string, start, end int) bool {
+	if start > 0 {
+		prev := text[start-1]
+		switch {
+		case prev == ':' || prev == '\\' || prev == '/' || prev == '.' || prev == '-' || prev == '_':
+			return true
+		case prev >= 'A' && prev <= 'Z', prev >= 'a' && prev <= 'z', prev >= '0' && prev <= '9':
+			return true
+		}
+	}
+	if end < len(text) && (text[end] == '/' || text[end] == '\\') {
+		return true
+	}
+	return false
 }
 
 // detectUnevidencedClaimedSymbols flags exported-looking APIs the model named
-// that are not on disk (F110). Cross-lang: Go exported methods/funcs, Python
-// def, JS/TS function. Suffix-only note for the synthesizer — not a prefix.
+// that are not on disk. Cross-lang: Go exported methods/funcs, Python def,
+// JS/TS function. A lowercase qualifier (io.Reader, fs.File, numpy.Array)
+// is a package or module type, not a claim that Reader itself is exported.
+// HTTP methods before a path (POST /items) are routes, not exports.
 func detectUnevidencedClaimedSymbols(wd, synth string) []string {
 	disk := collectOnDiskAPINames(wd)
 	if len(disk) == 0 {
@@ -466,16 +539,26 @@ func detectUnevidencedClaimedSymbols(wd, synth string) []string {
 			return
 		}
 		seen[name] = true
-		out = append(out, fmt.Sprintf("`%s` is not an on-disk export — do not document or call it (F110)", name))
+		out = append(out, fmt.Sprintf("`%s` is not an on-disk export — do not document or call it", name))
 	}
 	for _, m := range claimedExportedCallRe.FindAllStringSubmatch(synth, -1) {
 		addClaim(m)
 	}
-	for _, m := range claimedSlashIdentRe.FindAllStringSubmatch(synth, -1) {
-		addClaim(m)
+	for _, loc := range claimedSlashIdentRe.FindAllStringSubmatchIndex(synth, -1) {
+		if len(loc) < 4 || slashIdentIsFilesystemPath(synth, loc[0], loc[1]) {
+			continue
+		}
+		addClaim([]string{"", synth[loc[2]:loc[3]]})
 	}
 	for _, m := range claimedDotIdentRe.FindAllStringSubmatch(synth, -1) {
-		addClaim(m)
+		if len(m) < 3 {
+			continue
+		}
+		qual := m[1]
+		if qual != "" && qual == strings.ToLower(qual) {
+			continue
+		}
+		addClaim([]string{m[0], m[2]})
 	}
 	if len(out) > 8 {
 		out = out[:8]
