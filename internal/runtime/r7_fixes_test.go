@@ -282,3 +282,36 @@ func TestUpdatePlanStatus_SyncsPhaseStatuses(t *testing.T) {
 		}
 	}
 }
+
+func TestGoCLIEntryUsesModuleNotServer(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module filecheck\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "internal", "manifest"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "internal", "manifest", "manifest.go"), []byte("package manifest\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	kept, _, _ := sanitizeBuilderPathsForTask([]builderCodeFile{
+		{Path: "main.go", Content: "package main\nfunc main() {}\n"},
+	}, "directory file checksum in go, hash each file")
+	if len(kept) != 1 || kept[0].Path != "cmd/filecheck/main.go" {
+		t.Fatalf("CLI must not land in cmd/server, got %+v", kept)
+	}
+	httpKept, _, _ := sanitizeBuilderPathsForTask([]builderCodeFile{
+		{Path: "main.go", Content: "package main\nfunc main() {}\n"},
+	}, "golang HTTP service with cmd/server")
+	if len(httpKept) != 1 || httpKept[0].Path != "cmd/server/main.go" {
+		t.Fatalf("HTTP entry must stay cmd/server, got %+v", httpKept)
+	}
+}
