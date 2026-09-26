@@ -457,10 +457,8 @@ func testsEvidenceOK(root string) bool {
 	found := false
 	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || info.IsDir() {
-			if info != nil && info.IsDir() {
-				if projectfiles.ShouldSkipWalkDir(info.Name()) {
-					return filepath.SkipDir
-				}
+			if info != nil && info.IsDir() && path != root && projectfiles.ShouldSkipWalkDir(info.Name()) {
+				return filepath.SkipDir
 			}
 			return nil
 		}
