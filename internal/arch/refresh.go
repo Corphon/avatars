@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"avatars/internal/llm"
 )
@@ -49,6 +50,11 @@ func RefreshArchDocFromProject(root string, doc *ArchDoc, opts RefreshOptions) [
 
 	doc.EntryPoints = buildEntryPoints(root, scan)
 	doc.Layers = buildLayersFromScan(scan)
+	if overviewDeniesCurrentEntries(doc.Overview, doc.EntryPoints) {
+		if next := overviewFromEntries(doc.EntryPoints); next != "" {
+			doc.Overview = next
+		}
+	}
 	doc.DataFlow = AnalyzeDataFlow(root)
 	doc.Dependencies = depsFromDataFlow(doc.DataFlow)
 
@@ -68,6 +74,7 @@ func RefreshArchDocFromProject(root string, doc *ArchDoc, opts RefreshOptions) [
 
 	doc.Meta.LastModifiedFiles = scan.KeyFiles()
 	doc.Meta.FileFingerprint = ComputeFingerprint(root, doc.Meta.LastModifiedFiles)
+	doc.Meta.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
 	if doc.Meta.Source == "" {
 		doc.Meta.Source = "workflow-auto-refresh"
 	}
@@ -89,6 +96,65 @@ func buildEntryPoints(root string, scan *ProjectScan) []EntryPoint {
 		})
 	}
 	return out
+}
+
+// overviewDeniesCurrentEntries is true when the prose still says the project
+// has no process entry, but the scan already found one. The replacement is
+// local; it does not call the model.
+func overviewDeniesCurrentEntries(overview string, entries []EntryPoint) bool {
+	if len(entries) == 0 || strings.TrimSpace(overview) == "" {
+		return false
+	}
+	lower := strings.ToLower(overview)
+	needles := []string{
+		"no http server",
+		"no cli entry",
+		"no entry point",
+		"entry point exists yet",
+		"before transport",
+		"no command-line entry",
+		"no command line entry",
+	}
+	for _, n := range needles {
+		if strings.Contains(lower, n) {
+			return true
+		}
+	}
+	// The overview follows the user's language. These tokens match a Chinese
+	// denial of an entry that is already on disk. Spaces are removed first.
+	compact := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, lower)
+	for _, n := range []string{
+		"尚无http", "没有http", "无http服务", "没有入口", "无入口", "尚无入口",
+		"没有命令行", "无命令行", "没有cli", "无cli",
+	} {
+		if strings.Contains(compact, n) {
+			return true
+		}
+	}
+	return false
+}
+
+func overviewFromEntries(entries []EntryPoint) string {
+	var paths []string
+	for _, e := range entries {
+		p := strings.TrimSpace(e.Path)
+		if p == "" {
+			continue
+		}
+		paths = append(paths, p)
+		if len(paths) == 4 {
+			break
+		}
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	return "Process entry points on disk: " + strings.Join(paths, ", ") + "."
 }
 
 func entrySummary(ec EntryCandidate) string {
@@ -115,14 +181,12 @@ func InferEntryKind(root, relPath string) string {
 		"chi.", "mux.", "fastapi", "uvicorn", "flask(", "django", "express(",
 		"app.listen", "axum::", "actix_web", "rocket::", "hyper::",
 		"@app.get", "@app.post", "create_app",
+		"http.server", "basehttprequesthandler", "threadinghttpserver",
 	}
 	for _, cue := range httpCues {
 		if strings.Contains(body, cue) {
 			return "http-server"
 		}
-	}
-	if strings.Contains(lowerPath, "server") || strings.Contains(lowerPath, "/api/") {
-		return "http-server"
 	}
 
 	cliCues := []string{
@@ -137,6 +201,12 @@ func InferEntryKind(root, relPath string) string {
 	if strings.Contains(lowerPath, "cmd/") || strings.HasPrefix(filepath.Base(lowerPath), "main.") {
 		// Default cmd/main without HTTP cues → cli (common for Go CLIs).
 		if strings.Contains(lowerPath, "cmd/") && !strings.Contains(lowerPath, "server") {
+			return "cli"
+		}
+	}
+	baseName := filepath.Base(lowerPath)
+	if baseName == "__main__.py" || baseName == "main.py" {
+		if strings.Contains(body, "__name__") || strings.Contains(body, "def main") {
 			return "cli"
 		}
 	}
