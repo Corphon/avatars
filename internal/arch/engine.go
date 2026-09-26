@@ -160,11 +160,15 @@ func ScanProject(root string) (*ProjectScan, error) {
 		if info.IsDir() {
 			name := info.Name()
 			lowerName := strings.ToLower(name)
-			if projectfiles.ShouldSkipWalkDir(name) || name == "stage" || name == "web" ||
+			// Never SkipDir the walk root. Nested fixture and noise dirs still skip.
+			if path != root && (projectfiles.ShouldSkipWalkDir(name) || name == "stage" || name == "web" ||
 				name == ".idea" || name == ".vscode" || name == ".pytest_cache" ||
 				strings.HasSuffix(lowerName, ".egg-info") ||
-				strings.HasPrefix(name, ".") {
+				strings.HasPrefix(name, ".")) {
 				return filepath.SkipDir
+			}
+			if path == root {
+				return nil
 			}
 			// Track top-level directories — skip pollution / cache-like names.
 			parts := strings.Split(rel, string(filepath.Separator))
@@ -198,6 +202,9 @@ func ScanProject(root string) (*ProjectScan, error) {
 	scan.FileTree = files
 
 	for d := range topDirs {
+		if !dirHasScannedFile(files, d) {
+			continue
+		}
 		scan.KeyDirNames = append(scan.KeyDirNames, d)
 	}
 	sort.Strings(scan.KeyDirNames)
@@ -245,13 +252,18 @@ func ScanProject(root string) (*ProjectScan, error) {
 			scan.DocFiles = append(scan.DocFiles, f)
 		}
 
-		// Entry point candidates: files in cmd/, main.*, or with known patterns.
-		if isEntryCandidate(f, base) {
+		// Entry point candidates: files in cmd/, main.*, or a process entry
+		// whose content actually starts a program. A library server.go is not one.
+		head := readFirstN(filepath.Join(root, f), 2500)
+		if isEntryCandidate(f, base, head) {
 			ec := EntryCandidate{
 				Path:   f,
-				Reason: entryReason(f, base),
+				Reason: entryReason(f, base, head),
 			}
-			ec.Content = readFirstN(filepath.Join(root, f), 200)
+			if len(head) > 200 {
+				head = head[:200]
+			}
+			ec.Content = head
 			scan.EntryCandidates = append(scan.EntryCandidates, ec)
 		}
 	}
@@ -262,42 +274,59 @@ func ScanProject(root string) (*ProjectScan, error) {
 	return scan, nil
 }
 
-// isEntryCandidate uses language-agnostic heuristics to guess whether a file
-// is an entry point. The LLM makes the final determination.
-func isEntryCandidate(path, base string) bool {
-	dir := filepath.Dir(path)
-
-	// Directories that conventionally contain entry points.
-	if strings.HasPrefix(dir, "cmd") || strings.HasPrefix(dir, "cmd/") {
+// isEntryCandidate guesses whether a file starts a process.
+// cmd/ and main/index names are entries. server/app/cli/run names are entries
+// only when the content actually starts a program, so a library server.go
+// is not labeled as main.
+func isEntryCandidate(path, base, content string) bool {
+	dir := filepath.ToSlash(filepath.Dir(path))
+	if dir == "cmd" || strings.HasPrefix(dir, "cmd/") {
 		return true
 	}
-
-	// Common entry-point file names.
-	entryNames := map[string]bool{
-		"main.go": true, "main.py": true, "main.rs": true, "main.ts": true,
-		"main.js": true, "main.c": true, "main.cpp": true,
-		"index.ts": true, "index.js": true, "index.tsx": true,
-		"app.go": true, "app.py": true, "server.go": true, "server.py": true,
-		"cli.go": true, "cli.py": true, "run.go": true, "run.py": true,
-		"__main__.py": true, "setup.py": true,
+	switch strings.ToLower(base) {
+	case "main.go", "main.py", "main.rs", "main.ts", "main.js", "main.c", "main.cpp",
+		"index.ts", "index.js", "index.tsx", "__main__.py":
+		return true
+	case "app.go", "server.go", "cli.go", "run.go",
+		"app.py", "server.py", "cli.py", "run.py", "setup.py":
+		return contentLooksLikeProcessEntry(base, content)
+	default:
+		return false
 	}
-	return entryNames[base]
 }
 
-func entryReason(path, base string) string {
-	dir := filepath.Dir(path)
-	if strings.HasPrefix(dir, "cmd") {
+func contentLooksLikeProcessEntry(base, content string) bool {
+	lower := strings.ToLower(content)
+	switch strings.ToLower(filepath.Ext(base)) {
+	case ".go":
+		return strings.Contains(content, "package main") && strings.Contains(content, "func main")
+	case ".py":
+		return strings.Contains(lower, "__name__") || strings.Contains(lower, "uvicorn") ||
+			strings.Contains(lower, ".run(")
+	case ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx":
+		return strings.Contains(lower, ".listen(") || strings.Contains(lower, "createserver")
+	default:
+		return strings.Contains(lower, "func main") || strings.Contains(lower, "public static void main")
+	}
+}
+
+func entryReason(path, base, content string) string {
+	dir := filepath.ToSlash(filepath.Dir(path))
+	if dir == "cmd" || strings.HasPrefix(dir, "cmd/") {
 		return "in cmd/ directory"
 	}
-	switch filepath.Ext(base) {
+	switch strings.ToLower(filepath.Ext(base)) {
 	case ".go":
-		return "potential Go main package"
+		if strings.Contains(content, "package main") {
+			return "Go main package"
+		}
+		return "process entry"
 	case ".py":
-		return "potential Python entry script"
+		return "Python entry script"
 	case ".rs":
-		return "potential Rust binary"
+		return "Rust binary"
 	case ".ts", ".js", ".tsx", ".jsx":
-		return "potential JS/TS entry point"
+		return "JS/TS entry point"
 	default:
 		return "matches entry-point naming convention"
 	}
@@ -325,13 +354,25 @@ func isNoiseTopDir(name string) bool {
 
 func isHarnessRuntimeArtifact(name string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
+	if strings.HasSuffix(lower, ".log") || strings.HasSuffix(lower, ".err.log") {
+		return true
+	}
 	if strings.HasPrefix(name, "_") {
-		if strings.HasSuffix(lower, ".log") || strings.HasSuffix(lower, ".pid") ||
-			strings.HasSuffix(lower, ".txt") {
+		if strings.HasSuffix(lower, ".pid") || strings.HasSuffix(lower, ".txt") {
 			return true
 		}
 	}
-	return strings.HasSuffix(lower, ".err.log")
+	return false
+}
+
+func dirHasScannedFile(files []string, dir string) bool {
+	prefix := filepath.ToSlash(dir) + "/"
+	for _, f := range files {
+		if strings.HasPrefix(filepath.ToSlash(f), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func readFirstN(absPath string, n int) string {
@@ -460,6 +501,17 @@ func (s *ProjectScan) KeyFiles() []string {
 		files = append(files, dm.Path)
 	}
 	files = append(files, s.ConfigFiles...)
+	if len(files) == 0 {
+		for _, f := range s.FileTree {
+			switch strings.ToLower(filepath.Ext(f)) {
+			case ".go", ".py", ".rs", ".js", ".jsx", ".ts", ".tsx", ".java", ".cs":
+				files = append(files, f)
+			}
+			if len(files) >= 12 {
+				break
+			}
+		}
+	}
 	sort.Strings(files)
 	return files
 }
