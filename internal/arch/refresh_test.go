@@ -74,6 +74,55 @@ func main() { _ = sqlite.DriverName; http.ListenAndServe(":8080", nil) }
 	}
 }
 
+func TestRefreshReplacesOverviewThatDeniesEntries(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(rel, body string) {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("cmd/ledger/main.go", "package main\nimport \"net/http\"\nfunc main() { http.ListenAndServe(\":8080\", nil) }\n")
+	doc := NewArchDoc("test", dir, nil)
+	doc.Overview = "No HTTP server or CLI entry point exists yet; this is a phase-1 boundary before transport is added."
+	doc.Meta.GeneratedAt = "2020-01-01T00:00:00Z"
+	_ = RefreshArchDocFromProject(dir, doc, RefreshOptions{PreserveOverview: true, HealthKnown: true, ProjectHealthy: true})
+	if overviewDeniesCurrentEntries(doc.Overview, doc.EntryPoints) {
+		t.Fatalf("overview still denies entries: %q", doc.Overview)
+	}
+	if !strings.Contains(doc.Overview, "cmd/ledger/main.go") {
+		t.Fatalf("overview should name the entry, got %q", doc.Overview)
+	}
+	if doc.Meta.GeneratedAt == "2020-01-01T00:00:00Z" {
+		t.Fatal("refresh should update generated_at")
+	}
+}
+
+func TestOverviewChineseDenialAndPythonMainKind(t *testing.T) {
+	entries := []EntryPoint{{Path: "booking/__main__.py", Kind: "cli"}}
+	text := "目前尚无 HTTP/CLI 入口点，仅能作为库导入使用。"
+	if !overviewDeniesCurrentEntries(text, entries) {
+		t.Fatal("chinese denial should match when entries exist")
+	}
+	if overviewDeniesCurrentEntries("领域模型已经可测，尚无独立的发布说明。", entries) {
+		t.Fatal("unrelated prose must stay")
+	}
+	dir := t.TempDir()
+	body := "from booking.cli import main\n\nif __name__ == \"__main__\":\n    main()\n"
+	if err := os.MkdirAll(filepath.Join(dir, "booking"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "booking", "__main__.py"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if kind := InferEntryKind(dir, "booking/__main__.py"); kind != "cli" {
+		t.Fatalf("python __main__ kind = %q", kind)
+	}
+}
+
 func TestIsGoStdlib(t *testing.T) {
 	if !isGoStdlib("fmt") || !isGoStdlib("net/http") || !isGoStdlib("encoding/json") {
 		t.Fatal("expected stdlib detection")
