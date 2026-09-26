@@ -70,6 +70,9 @@ func (q *Queue) Pop() {}
 	if !strings.Contains(joined, "Drain") {
 		t.Fatalf("expected Drain unevidenced, got %q", joined)
 	}
+	if strings.Contains(joined, "F110") {
+		t.Fatalf("ticket id leaked into the note: %q", joined)
+	}
 	if strings.Contains(joined, "Peek") {
 		t.Fatalf("Peek exists on disk, should not flag: %q", joined)
 	}
@@ -99,5 +102,62 @@ func TestF110_ResolveAnalysisReportPathSkipsDelivery(t *testing.T) {
 	}
 	if got != "" && isHumanDeliveryDocPath(got) {
 		t.Fatalf("analysis report path must not be a human delivery doc: %q", got)
+	}
+}
+
+func TestQualifiedPackageTypeIsNotAnUnevidencedExport(t *testing.T) {
+	dir := t.TempDir()
+	src := "package counter\n\nimport \"io\"\n\nfunc Count(r io.Reader) ([]string, error) { return nil, nil }\n"
+	if err := os.WriteFile(filepath.Join(dir, "counter.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := detectUnevidencedClaimedSymbols(dir, "Call Count with an io.Reader. Also q.Drain().")
+	joined := strings.Join(got, "\n")
+	if strings.Contains(joined, "Reader") {
+		t.Fatalf("package-qualified Reader must not be flagged:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Drain") {
+		t.Fatalf("unqualified Drain call must still be flagged:\n%s", joined)
+	}
+	if strings.Contains(joined, "F110") {
+		t.Fatalf("ticket id leaked: %s", joined)
+	}
+}
+
+func TestHTTPMethodsAreNotUnevidencedExports(t *testing.T) {
+	dir := t.TempDir()
+	src := "package httpapi\n\nfunc Add(title string) error { return nil }\n"
+	if err := os.WriteFile(filepath.Join(dir, "handler.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	synth := "Routes: POST /bookmarks, GET /bookmarks?tag=, PUT /bookmarks, PATCH /bookmarks, DELETE /bookmarks/{id}. Also MissingFunc()."
+	got := detectUnevidencedClaimedSymbols(dir, synth)
+	joined := strings.Join(got, "\n")
+	for _, verb := range []string{"POST", "GET", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"} {
+		if strings.Contains(joined, "`"+verb+"`") {
+			t.Fatalf("HTTP method %s must not be an export claim:\n%s", verb, joined)
+		}
+	}
+	if !strings.Contains(joined, "MissingFunc") {
+		t.Fatalf("real missing call must still be flagged:\n%s", joined)
+	}
+}
+
+func TestPathSegmentsAndHeadingsAreNotUnevidencedExports(t *testing.T) {
+	dir := t.TempDir()
+	src := "package ledger\n\nfunc Add(cents int64) error { return nil }\n"
+	if err := os.WriteFile(filepath.Join(dir, "ledger.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	synth := "Wrote files under D:/SKF/dev/ledger. CLI/entrypoint stays. See **Risks/Notes**. MissingFunc() is not real."
+	got := detectUnevidencedClaimedSymbols(dir, synth)
+	joined := strings.Join(got, "\n")
+	for _, name := range []string{"SKF", "CLI", "Risks", "Notes"} {
+		if strings.Contains(joined, "`"+name+"`") {
+			t.Fatalf("%s must not be an export claim:\n%s", name, joined)
+		}
+	}
+	if !strings.Contains(joined, "MissingFunc") {
+		t.Fatalf("real missing call must still be flagged:\n%s", joined)
 	}
 }
