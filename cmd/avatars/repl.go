@@ -27,6 +27,7 @@ type replCommandOptions struct {
 	Verbose        bool
 	PermissionMode string
 	ReplContext    string // formatted REPL conversation context, set per-turn
+	SkipTalkModel  bool   // dry-run route names talk without calling the model
 }
 
 type replLastTurnArtifact struct {
@@ -332,7 +333,12 @@ func runREPLNaturalLanguage(line string, output io.Writer, options replCommandOp
 	}
 	switch route.Kind {
 	case naturalLanguageRouteDirectAnswer:
-		fmt.Fprintln(output, route.Answer)
+		if strings.HasPrefix(route.Summary, "talk aside") {
+			noteREPLTalkLine(line)
+		}
+		if strings.TrimSpace(route.Answer) != "" {
+			fmt.Fprintln(output, route.Answer)
+		}
 		return false, nil
 	case naturalLanguageRouteSafeRun:
 		fmt.Fprintln(output, executionCueTaskIntro(line))
@@ -1112,6 +1118,22 @@ func printREPLHelp(output io.Writer) {
 const replContextMaxTurns = 10
 const replContextMaxLength = 4000
 
+// replTalkLines are aside turns. They stay in keyboard history and are
+// omitted from the context string later runs send to the model.
+var replTalkLines = map[string]bool{}
+
+func noteREPLTalkLine(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	replTalkLines[line] = true
+}
+
+func clearREPLTalkLines() {
+	replTalkLines = map[string]bool{}
+}
+
 // formatREPLContext builds a compact conversation context string from the
 // REPL history. It takes the most recent N turns (up to
 // replContextMaxTurns) and formats them as "Turn <n>: <input>" lines.
@@ -1128,6 +1150,9 @@ func formatREPLContext(history []string) string {
 	recent := history[start:]
 	var buf strings.Builder
 	for i, line := range recent {
+		if replTalkLines[strings.TrimSpace(line)] {
+			continue
+		}
 		turnNum := start + i + 1
 		entry := fmt.Sprintf("Turn %d: %s", turnNum, truncateLine(line, 500))
 		if buf.Len() > 0 {
